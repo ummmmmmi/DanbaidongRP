@@ -16,6 +16,9 @@ namespace UnityEditor.Rendering.Universal
         SerializedDataParameter m_HDRMinNits;
         SerializedDataParameter m_HDRMaxNits;
         SerializedDataParameter m_HDRAcesPreset;
+        SerializedDataParameter m_LutTexture;
+        SerializedDataParameter m_LutContribution;
+        SerializedDataParameter m_FallbackMode;
 
         // GT Tonemapping
         SerializedDataParameter m_MaxBrightness;
@@ -40,6 +43,9 @@ namespace UnityEditor.Rendering.Universal
             m_HDRMinNits = Unpack(o.Find(x => x.minNits));
             m_HDRMaxNits = Unpack(o.Find(x => x.maxNits));
             m_HDRAcesPreset = Unpack(o.Find(x => x.acesPreset));
+            m_LutTexture = Unpack(o.Find(x => x.lutTexture));
+            m_LutContribution = Unpack(o.Find(x => x.lutContribution));
+            m_FallbackMode = Unpack(o.Find(x => x.fallbackMode));
 
             m_MaxBrightness = Unpack(o.Find(x => x.maxBrightness));
             m_Contrast = Unpack(o.Find(x => x.contrast));
@@ -65,6 +71,17 @@ namespace UnityEditor.Rendering.Universal
                 PropertyField(m_LinearSectionLength);
                 PropertyField(m_BlackPow);
                 PropertyField(m_BlackMin);
+            }
+            else if (hdrTonemapMode == (int)TonemappingMode.External)
+            {
+                PropertyField(m_LutTexture);
+                PropertyField(m_LutContribution);
+
+                if (!((Tonemapping)target).ValidateLUT())
+                {
+                    int lutSize = asset != null ? asset.colorGradingLutSize : 0;
+                    EditorGUILayout.HelpBox($"External Tonemapping requires a valid 3D LUT whose width, height and depth all match the URP Color Grading LUT Size ({lutSize}).", MessageType.Warning);
+                }
             }
 
             if (asset != null && !asset.supportsHDR && hdrTonemapMode != (int)TonemappingMode.None)
@@ -110,6 +127,10 @@ namespace UnityEditor.Rendering.Universal
                         PropertyField(m_HDRPaperwhite);
                     }
                     EditorGUI.indentLevel--;
+                }
+                if (hdrTonemapMode == (int)TonemappingMode.External)
+                {
+                    PropertyField(m_FallbackMode);
                 }
                 // TODO: GT tonemapping
             }

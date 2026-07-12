@@ -1,7 +1,7 @@
 Shader "Hidden/Universal Render Pipeline/LutBuilderHdr"
 {
     HLSLINCLUDE
-        #pragma multi_compile_local _ _TONEMAP_ACES _TONEMAP_NEUTRAL
+        #pragma multi_compile_local _ _TONEMAP_ACES _TONEMAP_NEUTRAL _TONEMAP_EXTERNAL
         #pragma multi_compile_local_fragment _ HDR_COLORSPACE_CONVERSION
 
         #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/Core.hlsl"
@@ -197,6 +197,12 @@ Shader "Hidden/Universal Render Pipeline/LutBuilderHdr"
                 // Note: input is actually ACEScg (AP1 w/ linear encoding)
                 float3 aces = ACEScg_to_ACES(colorLinear);
                 colorLinear = AcesTonemap(aces);
+            }
+            #elif _TONEMAP_EXTERNAL
+            {
+                float3 inputLutSpace = saturate(LinearToLogC(max(colorLinear, 0.0)));
+                float3 externalTonemapped = ApplyLut3D(TEXTURE3D_ARGS(_ExternalTonemappingLut, sampler_LinearClamp), inputLutSpace, _ExternalTonemappingLut_Params.xy);
+                colorLinear = lerp(colorLinear, externalTonemapped, _ExternalTonemappingLut_Params.z);
             }
             #endif
 

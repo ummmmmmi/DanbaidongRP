@@ -1291,6 +1291,7 @@ namespace UnityEngine.Rendering.Universal
 
         public const string TonemapGT = "_TONEMAP_GT";
         public const string TonemapACESSampleVer = "_TONEMAP_ACES_SAMPLE_VER";
+        public const string TonemapExternal = "_TONEMAP_EXTERNAL";
 
         /// <summary> Keyword used for ACES Tonemapping. </summary>
         public const string TonemapACES = "_TONEMAP_ACES";

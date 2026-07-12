@@ -207,6 +207,9 @@ namespace UnityEngine.Rendering.Universal.Internal
                 int lutWidth = lutHeight * lutHeight;
                 var lutParameters = new Vector4(lutHeight, 0.5f / lutWidth, 0.5f / lutHeight,
                     lutHeight / (lutHeight - 1f));
+                TonemappingMode toneMappingMode = passData.cameraData.isHDROutputActive
+                    ? tonemapping.GetHDRTonemappingMode()
+                    : (tonemapping.IsActive() ? tonemapping.mode.value : TonemappingMode.None);
 
                 // Fill in constants
                 material.SetVector(ShaderConstants._Lut_Params, lutParameters);
@@ -243,12 +246,17 @@ namespace UnityEngine.Rendering.Universal.Internal
                 {
                     material.shaderKeywords = null;
 
-                    switch (tonemapping.mode.value)
+                    switch (toneMappingMode)
                     {
                         case TonemappingMode.Neutral: material.EnableKeyword(ShaderKeywordStrings.TonemapNeutral); break;
                         case TonemappingMode.ACES: material.EnableKeyword(allowColorGradingACESHDR ? ShaderKeywordStrings.TonemapACES : ShaderKeywordStrings.TonemapNeutral); break;
                         case TonemappingMode.ACESSimpleVer: material.EnableKeyword(ShaderKeywordStrings.TonemapACESSampleVer); break;
                         case TonemappingMode.GranTurismo: material.EnableKeyword(ShaderKeywordStrings.TonemapGT); break;
+                        case TonemappingMode.External:
+                            material.EnableKeyword(ShaderKeywordStrings.TonemapExternal);
+                            material.SetTexture(ShaderConstants._ExternalTonemappingLut, tonemapping.lutTexture.value);
+                            material.SetVector(ShaderConstants._ExternalTonemappingLut_Params, new Vector4(1f / lutHeight, lutHeight - 1f, tonemapping.lutContribution.value, 0f));
+                            break;
                         default: break; // None
                     }
 
@@ -344,6 +352,8 @@ namespace UnityEngine.Rendering.Universal.Internal
             public static readonly int _CurveHueVsSat = Shader.PropertyToID("_CurveHueVsSat");
             public static readonly int _CurveLumVsSat = Shader.PropertyToID("_CurveLumVsSat");
             public static readonly int _CurveSatVsSat = Shader.PropertyToID("_CurveSatVsSat");
+            public static readonly int _ExternalTonemappingLut = Shader.PropertyToID("_ExternalTonemappingLut");
+            public static readonly int _ExternalTonemappingLut_Params = Shader.PropertyToID("_ExternalTonemappingLut_Params");
         }
     }
 }

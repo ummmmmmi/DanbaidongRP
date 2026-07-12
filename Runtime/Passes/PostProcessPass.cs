@@ -37,6 +37,7 @@ namespace UnityEngine.Rendering.Universal
         RTHandle m_StreakTmpTexture2;
         RTHandle m_ScreenSpaceLensFlareResult;
         RTHandle m_UserLut;
+        RTHandle m_ExternalTonemappingLut;
 
         const string k_RenderPostProcessingTag = "Blit PostProcessing Effects";
         const string k_RenderFinalPostProcessingTag = "Blit Final PostProcessing";
@@ -266,6 +267,7 @@ namespace UnityEngine.Rendering.Universal
             m_StreakTmpTexture2?.Release();
             m_ScreenSpaceLensFlareResult?.Release();
             m_UserLut?.Release();
+            m_ExternalTonemappingLut?.Release();
         }
 
         /// <summary>
@@ -1645,6 +1647,9 @@ namespace UnityEngine.Rendering.Universal
                     m_ColorLookup.texture.value.height - 1f,
                     m_ColorLookup.contribution.value)
             );
+            TonemappingMode toneMappingMode = renderingData.cameraData.universalCameraData.isHDROutputActive
+                ? m_Tonemapping.GetHDRTonemappingMode()
+                : (m_Tonemapping.IsActive() ? m_Tonemapping.mode.value : TonemappingMode.None);
 
             if (hdr)
             {
@@ -1652,12 +1657,17 @@ namespace UnityEngine.Rendering.Universal
             }
             else
             {
-                switch (m_Tonemapping.mode.value)
+                switch (toneMappingMode)
                 {
                     case TonemappingMode.Neutral: material.EnableKeyword(ShaderKeywordStrings.TonemapNeutral); break;
                     case TonemappingMode.ACES: material.EnableKeyword(ShaderKeywordStrings.TonemapACES); break;
                     case TonemappingMode.ACESSimpleVer: material.EnableKeyword(ShaderKeywordStrings.TonemapACESSampleVer); break;
                     case TonemappingMode.GranTurismo: material.EnableKeyword(ShaderKeywordStrings.TonemapGT); break;
+                    case TonemappingMode.External:
+                        material.EnableKeyword(ShaderKeywordStrings.TonemapExternal);
+                        material.SetTexture(ShaderConstants._ExternalTonemappingLut, m_Tonemapping.lutTexture.value);
+                        material.SetVector(ShaderConstants._ExternalTonemappingLut_Params, new Vector4(1f / lutHeight, lutHeight - 1f, m_Tonemapping.lutContribution.value, 0f));
+                        break;
 
                     default: break; // None
                 }
@@ -2078,6 +2088,8 @@ namespace UnityEngine.Rendering.Universal
             public static readonly int _UserLut_Params = Shader.PropertyToID("_UserLut_Params");
             public static readonly int _InternalLut = Shader.PropertyToID("_InternalLut");
             public static readonly int _UserLut = Shader.PropertyToID("_UserLut");
+            public static readonly int _ExternalTonemappingLut = Shader.PropertyToID("_ExternalTonemappingLut");
+            public static readonly int _ExternalTonemappingLut_Params = Shader.PropertyToID("_ExternalTonemappingLut_Params");
             public static readonly int _DownSampleScaleFactor = Shader.PropertyToID("_DownSampleScaleFactor");
             public static readonly int _GTToneMap_Params0 = Shader.PropertyToID("_GTToneMap_Params0");
             public static readonly int _GTToneMap_Params1 = Shader.PropertyToID("_GTToneMap_Params1");

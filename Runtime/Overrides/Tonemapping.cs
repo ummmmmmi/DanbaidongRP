@@ -16,16 +16,29 @@ namespace UnityEngine.Rendering.Universal
         /// Use this option if you only want range-remapping with minimal impact on color hue and saturation.
         /// It is generally a great starting point for extensive color grading.
         /// </summary>
-        Neutral, // Neutral tonemapper
+        Neutral,
 
         /// <summary>
         /// Use this option to apply a close approximation of the reference ACES tonemapper for a more filmic look.
         /// It is more contrasted than Neutral and has an effect on actual color hue and saturation.
         /// Note that if you use this tonemapper all the grading operations will be done in the ACES color spaces for optimal precision and results.
         /// </summary>
-        ACES, // ACES Filmic reference tonemapper (custom approximation)
-        ACESSimpleVer,  // ACES Filmic(避免亮度降低的简单版本)
-        GranTurismo,    // GTTonemapping(避免非亮部色调变化，通常用于卡通渲染) ref:https://forum.unity.com/threads/how-to-do-custom-tone-mapping-instead-of-neutral-aces-in-urp.849280/
+        ACES,
+
+        /// <summary>
+        /// Use a simplified ACES tonemapper variant.
+        /// </summary>
+        ACESSimpleVer,
+
+        /// <summary>
+        /// Use the Gran Turismo tonemapper.
+        /// </summary>
+        GranTurismo,
+
+        /// <summary>
+        /// Use an external 3D LUT sampled in LogC space as the tonemapper.
+        /// </summary>
+        External,
     }
 
     /// <summary>
@@ -63,6 +76,69 @@ namespace UnityEngine.Rendering.Universal
     }
 
     /// <summary>
+    /// Tonemap mode to be used when outputting to HDR device and when the main mode is not supported on HDR.
+    /// </summary>
+    public enum FallbackHDRTonemap
+    {
+        /// <summary>
+        /// No tonemapping.
+        /// </summary>
+        None = 0,
+
+        /// <summary>
+        /// Tonemapping mode with minimal impact on color hue and saturation.
+        /// </summary>
+        Neutral,
+
+        /// <summary>
+        /// ACES tonemapper for a more filmic look.
+        /// </summary>
+        ACES
+    }
+
+    /// <summary>
+    /// A <see cref="VolumeParameter"/> that contains a <see cref="NeutralRangeReductionMode"/> value.
+    /// </summary>
+    [Serializable]
+    public sealed class NeutralRangeReductionModeParameter : VolumeParameter<NeutralRangeReductionMode>
+    {
+        /// <summary>
+        /// Creates a new <see cref="NeutralRangeReductionModeParameter"/> instance.
+        /// </summary>
+        /// <param name="value">The initial value to store in the parameter.</param>
+        /// <param name="overrideState">The initial override state for the parameter.</param>
+        public NeutralRangeReductionModeParameter(NeutralRangeReductionMode value, bool overrideState = false) : base(value, overrideState) { }
+    }
+
+    /// <summary>
+    /// A <see cref="VolumeParameter"/> that contains a <see cref="HDRACESPreset"/> value.
+    /// </summary>
+    [Serializable]
+    public sealed class HDRACESPresetParameter : VolumeParameter<HDRACESPreset>
+    {
+        /// <summary>
+        /// Creates a new <see cref="HDRACESPresetParameter"/> instance.
+        /// </summary>
+        /// <param name="value">The initial value to store in the parameter.</param>
+        /// <param name="overrideState">The initial override state for the parameter.</param>
+        public HDRACESPresetParameter(HDRACESPreset value, bool overrideState = false) : base(value, overrideState) { }
+    }
+
+    /// <summary>
+    /// A <see cref="VolumeParameter"/> that contains a <see cref="FallbackHDRTonemap"/> value.
+    /// </summary>
+    [Serializable]
+    public sealed class FallbackHDRTonemapParameter : VolumeParameter<FallbackHDRTonemap>
+    {
+        /// <summary>
+        /// Creates a new <see cref="FallbackHDRTonemapParameter"/> instance.
+        /// </summary>
+        /// <param name="value">The initial value to store in the parameter.</param>
+        /// <param name="overrideState">The initial override state for the parameter.</param>
+        public FallbackHDRTonemapParameter(FallbackHDRTonemap value, bool overrideState = false) : base(value, overrideState) { }
+    }
+
+    /// <summary>
     /// A volume component that holds settings for the tonemapping effect.
     /// </summary>
     [Serializable, VolumeComponentMenu("Post-processing/Tonemapping")]
@@ -90,6 +166,26 @@ namespace UnityEngine.Rendering.Universal
         /// </summary>
         [Tooltip("Use the ACES preset for HDR displays.")]
         public HDRACESPresetParameter acesPreset = new HDRACESPresetParameter(HDRACESPreset.ACES1000Nits);
+
+        /// <summary>
+        /// A custom 3D texture lookup table to apply.
+        /// This parameter is only used when <see cref="TonemappingMode.External"/> is set.
+        /// </summary>
+        [Tooltip("A custom 3D texture lookup table to apply when External tonemapping is selected. The LUT size must match the URP Color Grading LUT Size.")]
+        public Texture3DParameter lutTexture = new Texture3DParameter(null);
+
+        /// <summary>
+        /// How much of the lookup texture will contribute to the tonemapping effect.
+        /// This parameter is only used when <see cref="TonemappingMode.External"/> is set.
+        /// </summary>
+        [Tooltip("How much of the lookup texture will contribute to the tonemapping effect.")]
+        public ClampedFloatParameter lutContribution = new ClampedFloatParameter(1f, 0f, 1f);
+
+        /// <summary>
+        /// Specifies the fallback tonemapping algorithm to use when outputting to an HDR device, when the main mode is not supported.
+        /// </summary>
+        [Tooltip("Specifies the fallback tonemapping algorithm to use when outputting to an HDR device, when the selected mode is not supported.")]
+        public FallbackHDRTonemapParameter fallbackMode = new FallbackHDRTonemapParameter(FallbackHDRTonemap.Neutral);
 
         /// <summary>
         /// Specify how much hue to preserve. Values closer to 0 are likely to preserve hue. As values get closer to 1, Unity doesn't correct hue shifts.
@@ -167,7 +263,56 @@ namespace UnityEngine.Rendering.Universal
         #endregion
 
         /// <inheritdoc/>
-        public bool IsActive() => mode.value != TonemappingMode.None;
+        public bool IsActive()
+        {
+            if (mode.value == TonemappingMode.External)
+                return ValidateLUT() && lutContribution.value > 0f;
+
+            return mode.value != TonemappingMode.None;
+        }
+
+        internal TonemappingMode GetHDRTonemappingMode()
+        {
+            if (mode.value == TonemappingMode.External)
+            {
+                if (fallbackMode.value == FallbackHDRTonemap.None)
+                    return TonemappingMode.None;
+
+                if (fallbackMode.value == FallbackHDRTonemap.ACES)
+                    return TonemappingMode.ACES;
+
+                return TonemappingMode.Neutral;
+            }
+
+            return mode.value;
+        }
+
+        /// <summary>
+        /// Validates the format and size of the LUT texture set in <see cref="lutTexture"/>.
+        /// </summary>
+        /// <returns><c>true</c> if the LUT is valid, <c>false</c> otherwise.</returns>
+        public bool ValidateLUT()
+        {
+            var urpAsset = UniversalRenderPipeline.asset;
+            if (urpAsset == null || lutTexture.value == null)
+                return false;
+
+            if (lutTexture.value.width != urpAsset.colorGradingLutSize)
+                return false;
+
+            switch (lutTexture.value)
+            {
+                case Texture3D texture3D:
+                    return texture3D.width == texture3D.height &&
+                        texture3D.height == texture3D.depth;
+                case RenderTexture renderTexture:
+                    return renderTexture.dimension == TextureDimension.Tex3D &&
+                        renderTexture.width == renderTexture.height &&
+                        renderTexture.height == renderTexture.volumeDepth;
+                default:
+                    return false;
+            }
+        }
 
         /// <inheritdoc/>
         [Obsolete("Unused #from(2023.1)", false)]
@@ -186,33 +331,5 @@ namespace UnityEngine.Rendering.Universal
         /// <param name="value">The initial value to store in the parameter.</param>
         /// <param name="overrideState">The initial override state for the parameter.</param>
         public TonemappingModeParameter(TonemappingMode value, bool overrideState = false) : base(value, overrideState) { }
-    }
-
-    /// <summary>
-    /// A <see cref="VolumeParameter"/> that contains a <see cref="NeutralRangeReductionMode"/> value.
-    /// </summary>
-    [Serializable]
-    public sealed class NeutralRangeReductionModeParameter : VolumeParameter<NeutralRangeReductionMode>
-    {
-        /// <summary>
-        /// Creates a new <see cref="NeutralRangeReductionModeParameter"/> instance.
-        /// </summary>
-        /// <param name="value">The initial value to store in the parameter.</param>
-        /// <param name="overrideState">The initial override state for the parameter.</param>
-        public NeutralRangeReductionModeParameter(NeutralRangeReductionMode value, bool overrideState = false) : base(value, overrideState) { }
-    }
-
-    /// <summary>
-    /// A <see cref="VolumeParameter"/> that contains a <see cref="HDRACESPreset"/> value.
-    /// </summary>
-    [Serializable]
-    public sealed class HDRACESPresetParameter : VolumeParameter<HDRACESPreset>
-    {
-        /// <summary>
-        /// Creates a new <see cref="HDRACESPresetParameter"/> instance.
-        /// </summary>
-        /// <param name="value">The initial value to store in the parameter.</param>
-        /// <param name="overrideState">The initial override state for the parameter.</param>
-        public HDRACESPresetParameter(HDRACESPreset value, bool overrideState = false) : base(value, overrideState) { }
     }
 }

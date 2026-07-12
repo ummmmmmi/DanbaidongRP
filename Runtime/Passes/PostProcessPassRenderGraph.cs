@@ -1933,6 +1933,8 @@ namespace UnityEngine.Rendering.Universal
             internal Vector4 lutParams;
             internal TextureHandle userLutTexture;
             internal Vector4 userLutParams;
+            internal TextureHandle externalTonemappingLutTexture;
+            internal Vector4 externalTonemappingLutParams;
             internal Material material;
             internal UniversalCameraData cameraData;
             internal TonemappingMode toneMappingMode;
@@ -1966,6 +1968,28 @@ namespace UnityEngine.Rendering.Universal
             return m_UserLut != null ? renderGraph.ImportTexture(m_UserLut) : TextureHandle.nullHandle;
         }
 
+        TextureHandle TryGetCachedExternalTonemappingLutTextureHandle(RenderGraph renderGraph)
+        {
+            if (m_Tonemapping.lutTexture.value == null)
+            {
+                if (m_ExternalTonemappingLut != null)
+                {
+                    m_ExternalTonemappingLut.Release();
+                    m_ExternalTonemappingLut = null;
+                }
+            }
+            else
+            {
+                if (m_ExternalTonemappingLut == null || m_ExternalTonemappingLut.externalTexture != m_Tonemapping.lutTexture.value)
+                {
+                    m_ExternalTonemappingLut?.Release();
+                    m_ExternalTonemappingLut = RTHandles.Alloc(m_Tonemapping.lutTexture.value);
+                }
+            }
+
+            return m_ExternalTonemappingLut != null ? renderGraph.ImportTexture(m_ExternalTonemappingLut) : TextureHandle.nullHandle;
+        }
+
         public void RenderUberPost(RenderGraph renderGraph, ContextContainer frameData, UniversalCameraData cameraData, UniversalPostProcessingData postProcessingData, in TextureHandle sourceTexture, in TextureHandle destTexture, in TextureHandle lutTexture, in TextureHandle overlayUITexture, in TextureHandle bloomTexture, bool requireHDROutput, bool enableAlphaOutput, bool resolveToDebugScreen, bool hasFinalPass)
         {
             var material = m_Materials.uber;
@@ -1978,12 +2002,16 @@ namespace UnityEngine.Rendering.Universal
             Vector4 lutParams = new Vector4(1f / lutWidth, 1f / lutHeight, lutHeight - 1f, postExposureLinear);
 
             TextureHandle userLutTexture = TryGetCachedUserLutTextureHandle(renderGraph);
+            TextureHandle externalTonemappingLutTexture = TryGetCachedExternalTonemappingLutTextureHandle(renderGraph);
             Vector4 userLutParams = !m_ColorLookup.IsActive()
                 ? Vector4.zero
                 : new Vector4(1f / m_ColorLookup.texture.value.width,
                     1f / m_ColorLookup.texture.value.height,
                     m_ColorLookup.texture.value.height - 1f,
                     m_ColorLookup.contribution.value);
+            TonemappingMode toneMappingMode = cameraData.isHDROutputActive
+                ? m_Tonemapping.GetHDRTonemappingMode()
+                : (m_Tonemapping.IsActive() ? m_Tonemapping.mode.value : TonemappingMode.None);
 
             using (var builder = renderGraph.AddRasterRenderPass<UberPostPassData>("Blit Post Processing", out var passData, ProfilingSampler.Get(URPProfileId.RG_UberPost)))
             {
@@ -2012,6 +2040,11 @@ namespace UnityEngine.Rendering.Universal
                     passData.userLutTexture = userLutTexture;
                     builder.UseTexture(userLutTexture, AccessFlags.Read);
                 }
+                if (externalTonemappingLutTexture.IsValid())
+                {
+                    passData.externalTonemappingLutTexture = externalTonemappingLutTexture;
+                    builder.UseTexture(externalTonemappingLutTexture, AccessFlags.Read);
+                }
 
                 if (m_Bloom.IsActive())
                     builder.UseTexture(bloomTexture, AccessFlags.Read);
@@ -2019,9 +2052,10 @@ namespace UnityEngine.Rendering.Universal
                     builder.UseTexture(overlayUITexture, AccessFlags.Read);
 
                 passData.userLutParams = userLutParams;
+                passData.externalTonemappingLutParams = new Vector4(1f / lutHeight, lutHeight - 1f, m_Tonemapping.lutContribution.value, 0f);
                 passData.cameraData = cameraData;
                 passData.material = material;
-                passData.toneMappingMode = m_Tonemapping.mode.value;
+                passData.toneMappingMode = toneMappingMode;
                 passData.isHdrGrading = hdrGrading;
                 passData.enableAlphaOutput = enableAlphaOutput;
                 passData.hasFinalPass = hasFinalPass;
@@ -2040,6 +2074,8 @@ namespace UnityEngine.Rendering.Universal
                     material.SetVector(ShaderConstants._Lut_Params, data.lutParams);
                     material.SetTexture(ShaderConstants._UserLut, data.userLutTexture);
                     material.SetVector(ShaderConstants._UserLut_Params, data.userLutParams);
+                    material.SetTexture(ShaderConstants._ExternalTonemappingLut, data.externalTonemappingLutTexture);
+                    material.SetVector(ShaderConstants._ExternalTonemappingLut_Params, data.externalTonemappingLutParams);
 
                     material.SetVector(ShaderConstants._GTToneMap_Params0, data.GTToneMapParams0);
                     material.SetVector(ShaderConstants._GTToneMap_Params1, data.GTToneMapParams1);
@@ -2056,6 +2092,7 @@ namespace UnityEngine.Rendering.Universal
                             case TonemappingMode.ACES: material.EnableKeyword(ShaderKeywordStrings.TonemapACES); break;
                             case TonemappingMode.ACESSimpleVer: material.EnableKeyword(ShaderKeywordStrings.TonemapACESSampleVer); break;
                             case TonemappingMode.GranTurismo: material.EnableKeyword(ShaderKeywordStrings.TonemapGT); break;
+                            case TonemappingMode.External: material.EnableKeyword(ShaderKeywordStrings.TonemapExternal); break;
                             default: break; // None
                         }
                     }

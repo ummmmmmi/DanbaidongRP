@@ -2365,8 +2365,9 @@ namespace UnityEngine.Rendering.Universal
         {
             int eetfMode = 0;
             float hueShift = 0.0f;
+            TonemappingMode toneMappingMode = tonemapping.GetHDRTonemappingMode();
 
-            switch (tonemapping.mode.value)
+            switch (toneMappingMode)
             {
                 case TonemappingMode.Neutral:
                     eetfMode = (int)tonemapping.neutralHDRRangeReductionMode.value;

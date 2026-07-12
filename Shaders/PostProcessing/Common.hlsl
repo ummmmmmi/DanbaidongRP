@@ -88,6 +88,9 @@ real4 GetLinearToSRGB(real4 c)
 // Shared functions for uber & fast path (on-tile)
 // These should only process an input color, don't sample in neighbor pixels!
 
+TEXTURE3D(_ExternalTonemappingLut);
+float4 _ExternalTonemappingLut_Params;
+
 float3 ApplyVignette(float3 input, float2 uv, float2 center, float intensity, float roundness, float smoothness, float3 color)
 {
     center = UnityStereoTransformScreenSpaceTex(center);
@@ -116,6 +119,10 @@ float3 ApplyTonemap(float3 input
     input = AcesTonemap(aces);
 #elif _TONEMAP_NEUTRAL
     input = NeutralTonemap(input);
+#elif _TONEMAP_EXTERNAL
+    float3 inputLutSpace = saturate(LinearToLogC(max(input, 0.0)));
+    float3 externalTonemapped = ApplyLut3D(TEXTURE3D_ARGS(_ExternalTonemappingLut, sampler_LinearClamp), inputLutSpace, _ExternalTonemappingLut_Params.xy);
+    input = lerp(input, externalTonemapped, _ExternalTonemappingLut_Params.z);
 #endif
 
     return saturate(input);
