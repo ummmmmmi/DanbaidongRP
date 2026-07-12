@@ -16,6 +16,7 @@ namespace UnityEditor.Rendering.Universal
 
         // Common SRP's Lights properties
         public SerializedProperty intensity { get; }
+        public SerializedProperty lightUnit { get; }
 
         // URP Light Properties
         public SerializedProperty useAdditionalDataProp { get; }                     // Does light use shadow bias settings defined in UniversalRP asset file?
@@ -71,6 +72,7 @@ namespace UnityEditor.Rendering.Universal
             serializedAdditionalDataObject = new SerializedObject(lightsAdditionalData);
 
             intensity = serializedObject.FindProperty("m_Intensity");
+            lightUnit = serializedObject.FindProperty("m_LightUnit");
 
             useAdditionalDataProp = serializedAdditionalDataObject.FindProperty("m_UsePipelineSettings");
             additionalLightsShadowResolutionTierProp = serializedAdditionalDataObject.FindProperty("m_AdditionalLightsShadowResolutionTier");

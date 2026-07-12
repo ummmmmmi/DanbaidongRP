@@ -348,12 +348,58 @@ namespace UnityEditor.Rendering.Universal
 
             // Draw value field
             Rect valueRect = EditorGUILayout.GetControlRect();
+            Rect unitRect = valueRect;
+            unitRect.width = 82f;
+            unitRect.x = valueRect.xMax - unitRect.width;
+            valueRect.width -= unitRect.width + 2f;
             EditorGUI.BeginChangeCheck();
             EditorGUI.PropertyField(valueRect, serializedLight.intensity, CoreEditorStyles.empty);
             if (EditorGUI.EndChangeCheck())
             {
                 Undo.RecordObject(serializedLight.settings.light, "Adjust Light Intensity");
                 serializedLight.intensity.floatValue = Mathf.Max(serializedLight.intensity.floatValue, 0.0f);
+            }
+            DrawLightUnitPopup(serializedLight, unitRect);
+        }
+
+        static void DrawLightUnitPopup(UniversalRenderPipelineSerializedLight serializedLight, Rect rect)
+        {
+            if (serializedLight.lightUnit == null)
+                return;
+
+            LightUnit[] units;
+            string[] names;
+            switch (serializedLight.settings.light.type)
+            {
+                case LightType.Directional:
+                    units = new[] { LightUnit.Lux };
+                    names = new[] { "勒克斯 (Lux)" };
+                    break;
+                case LightType.Rectangle:
+                case LightType.Disc:
+                case LightType.Tube:
+                    units = new[] { LightUnit.Lumen, LightUnit.Nits, LightUnit.Ev100 };
+                    names = new[] { "流明 (Lumen)", "尼特 (Nits)", "曝光值 (EV100)" };
+                    break;
+                default:
+                    units = new[] { LightUnit.Lumen, LightUnit.Candela, LightUnit.Lux, LightUnit.Ev100 };
+                    names = new[] { "流明 (Lumen)", "坎德拉 (Candela)", "勒克斯 (Lux)", "曝光值 (EV100)" };
+                    break;
+            }
+            var current = serializedLight.lightUnit.intValue;
+            var index = Array.IndexOf(units, (LightUnit)current);
+            if (index < 0) index = 0;
+            EditorGUI.BeginChangeCheck();
+            var next = EditorGUI.Popup(rect, index, names);
+            if (EditorGUI.EndChangeCheck() && next != index)
+            {
+                var oldUnit = (LightUnit)current;
+                var newUnit = units[next];
+                var light = serializedLight.settings.light;
+                Undo.RecordObject(light, "Change Light Unit");
+                serializedLight.intensity.floatValue = LightUnitUtils.ConvertIntensity(
+                    light, serializedLight.intensity.floatValue, oldUnit, newUnit);
+                serializedLight.lightUnit.intValue = (int)units[next];
             }
         }
 
