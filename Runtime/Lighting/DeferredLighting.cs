@@ -14,6 +14,7 @@ namespace UnityEngine.Rendering.Universal.Internal
         private ComputeShader m_DeferredLightingCS;
         private int m_DeferredClassifyTilesKernel;
         private int m_DeferredLightingKernel;
+        private static readonly GlobalKeyword s_CapsuleOcclusionKeyword = GlobalKeyword.Create("_ENABLE_CAPSULE_OCCLUSION");
 
 
         // Constants
@@ -87,6 +88,8 @@ namespace UnityEngine.Rendering.Universal.Internal
             internal bool rayTracingShadowsEnabled;
             internal TextureHandle SSShadowsTexture;
             internal TextureHandle shadowScatterTexture;
+            internal TextureHandle capsuleOcclusionTexture;
+            internal TextureHandle capsuleOcclusionAbLutTexture;
             internal Vector4 ambientOcclusionParam;
         }
 
@@ -95,6 +98,7 @@ namespace UnityEngine.Rendering.Universal.Internal
             cmd.SetKeyword(ShaderGlobalKeywords.ScreenSpaceReflection, data.ReflectionLightingTexture.IsValid());
             cmd.SetKeyword(ShaderGlobalKeywords.ScreenSpaceOcclusion, data.AmbientOcclusionTexture.IsValid());
             cmd.SetKeyword(ShaderGlobalKeywords.RayTracingShadows, data.rayTracingShadowsEnabled);
+            cmd.SetKeyword(s_CapsuleOcclusionKeyword, data.capsuleOcclusionTexture.IsValid());
             cmd.SetGlobalVector(ShaderConstants._AmbientOcclusionParam, data.ambientOcclusionParam);
         }
 
@@ -142,6 +146,11 @@ namespace UnityEngine.Rendering.Universal.Internal
                         cmd.SetComputeTextureParam(data.deferredLightingCS, kernelIndex, ShaderConstants._ReflectionLightingTexture, data.ReflectionLightingTexture);
                     if (data.AmbientOcclusionTexture.IsValid())
                         cmd.SetComputeTextureParam(data.deferredLightingCS, kernelIndex, ShaderConstants._AmbientOcclusionTexture, data.AmbientOcclusionTexture);
+                    if (data.capsuleOcclusionTexture.IsValid())
+                    {
+                        cmd.SetComputeTextureParam(data.deferredLightingCS, kernelIndex, ShaderConstants._VisibilitySHRT, data.capsuleOcclusionTexture);
+                        cmd.SetComputeTextureParam(data.deferredLightingCS, kernelIndex, ShaderConstants._ABLutTex, data.capsuleOcclusionAbLutTexture);
+                    }
 
                     cmd.DispatchCompute(data.deferredLightingCS, kernelIndex, data.dispatchIndirectBuffer, (uint)modelIndex * 3 * sizeof(uint));
                 }
@@ -196,6 +205,8 @@ namespace UnityEngine.Rendering.Universal.Internal
                 passData.ReflectionLightingTexture = resourceData.reflectionLightingTexture;
                 passData.SSShadowsTexture = resourceData.screenSpaceShadowsTexture;
                 passData.shadowScatterTexture = resourceData.shadowScatterTexture;
+                passData.capsuleOcclusionTexture = resourceData.capsuleOcclusionTexture;
+                passData.capsuleOcclusionAbLutTexture = resourceData.capsuleOcclusionAbLutTexture;
                 passData.rayTracingShadowsEnabled = shadowData.rayTracingShadowsEnabled;
 
                 var stack = VolumeManager.instance.stack;
@@ -235,6 +246,11 @@ namespace UnityEngine.Rendering.Universal.Internal
                     builder.UseTexture(passData.AmbientOcclusionTexture, AccessFlags.Read);
                     builder.SetGlobalTextureAfterPass(passData.AmbientOcclusionTexture, ShaderConstants._AmbientOcclusionTexture);
                 }
+                if (passData.capsuleOcclusionTexture.IsValid())
+                {
+                    builder.UseTexture(passData.capsuleOcclusionTexture, AccessFlags.Read);
+                    builder.UseTexture(passData.capsuleOcclusionAbLutTexture, AccessFlags.Read);
+                }
 
                 for (int i = 0; i < gbuffer.Length; ++i)
                 {
@@ -264,6 +280,8 @@ namespace UnityEngine.Rendering.Universal.Internal
             public static readonly int _ReflectionLightingTexture = Shader.PropertyToID("_ReflectionLightingTexture");
             public static readonly int _AmbientOcclusionTexture = Shader.PropertyToID("_AmbientOcclusionTexture");
             public static readonly int _AmbientOcclusionParam = Shader.PropertyToID("_AmbientOcclusionParam");
+            public static readonly int _VisibilitySHRT = Shader.PropertyToID("_VisibilitySHRT");
+            public static readonly int _ABLutTex = Shader.PropertyToID("_ABLutTex");
         }
     }
 }

@@ -365,6 +365,26 @@ namespace UnityEngine.Rendering.Universal
         private TextureHandle _ssaoTexture;
 
         /// <summary>
+        /// Deferred Lighting 前生成的胶囊遮挡纹理。
+        /// </summary>
+        public TextureHandle capsuleOcclusionTexture
+        {
+            get => CheckAndGetTextureHandle(ref _capsuleOcclusionTexture);
+            set => CheckAndSetTextureHandle(ref _capsuleOcclusionTexture, value);
+        }
+        private TextureHandle _capsuleOcclusionTexture;
+
+        /// <summary>
+        /// 用于解码胶囊可见度 SH 的 AB 查找纹理。
+        /// </summary>
+        public TextureHandle capsuleOcclusionAbLutTexture
+        {
+            get => CheckAndGetTextureHandle(ref _capsuleOcclusionAbLutTexture);
+            set => CheckAndSetTextureHandle(ref _capsuleOcclusionAbLutTexture, value);
+        }
+        private TextureHandle _capsuleOcclusionAbLutTexture;
+
+        /// <summary>
         /// Screen Space Reflection texture. Written to by the SSR pass.
         /// </summary>
         public TextureHandle reflectionLightingTexture
@@ -448,6 +468,8 @@ namespace UnityEngine.Rendering.Universal
             _renderingLayersTexture = TextureHandle.nullHandle;
             _dBufferDepth = TextureHandle.nullHandle;
             _ssaoTexture = TextureHandle.nullHandle;
+            _capsuleOcclusionTexture = TextureHandle.nullHandle;
+            _capsuleOcclusionAbLutTexture = TextureHandle.nullHandle;
             _reflectionLightingTexture = TextureHandle.nullHandle;
             _stpDebugView = TextureHandle.nullHandle;
             _skyAmbientProbe = BufferHandle.nullHandle;

@@ -20,6 +20,7 @@
 #pragma multi_compile _ _PEROBJECT_SCREEN_SPACE_SHADOW
 #pragma multi_compile _ _SCREEN_SPACE_REFLECTION
 #pragma multi_compile _ _SCREEN_SPACE_OCCLUSION
+#pragma multi_compile _ _ENABLE_CAPSULE_OCCLUSION
 
 // Always define keywords
 #define _GPU_LIGHTS_CLUSTER
@@ -44,6 +45,7 @@
 #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/PreIntegratedFGD.hlsl"
 #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/GPUCulledLights.hlsl"
 #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/UnityGBuffer.hlsl"
+#include "Packages/com.unity.umi-render-extension-feature/DBDFeature/CapsuleOcclusion/Shader/EvaluateCapsuleOcclusion.hlsl"
 #endif
 //--------------------------------------------------------------------------------------------------
 // Inputs & outputs
@@ -535,6 +537,10 @@ DeferredLightingOutput DeferredLit(PositionInputs posInput, ShadingData shadingD
         // GI is from geometry's lightmap, stores in lighting buffer.
         indirectDiffuse = 0;
     }
+
+    #if defined(_ENABLE_CAPSULE_OCCLUSION)
+    indirectDiffuse *= GetCapsuleIndirectDiffuseVisibility(posInput.positionSS, normalWS);
+    #endif
     // TODO: ModifyBakedDiffuseLighting Function
 
 
