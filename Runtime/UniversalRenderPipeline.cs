@@ -196,8 +196,8 @@ namespace UnityEngine.Rendering.Universal
         // asset.
         private readonly UniversalRenderPipelineAsset pipelineAsset;
 
-        // Use to detect frame changes (for accurate frame count in editor, consider using hdCamera.GetCameraFrameCount)
-        int m_FrameCount;
+        // Use to detect frame changes. In the editor this also advances when only Scene View is rendering.
+        internal static int frameCount { get; private set; }
 
         /// <inheritdoc/>
         public override string ToString() => pipelineAsset?.ToString();
@@ -210,6 +210,7 @@ namespace UnityEngine.Rendering.Universal
         public UniversalRenderPipeline(UniversalRenderPipelineAsset asset)
         {
             pipelineAsset = asset;
+            frameCount = 0;
 
             m_GlobalSettings = UniversalRenderPipelineGlobalSettings.instance;
 
@@ -483,9 +484,9 @@ namespace UnityEngine.Rendering.Universal
             // For CleanHistoryFrameRTSystem to remove unused Cameras
             // Copy from HDRenderPipeline, which is HDCamera.CleanUnused()
             // TODO: Should I handle for m_ProbeCameraCache as HDRP?
-            // TODO: Should I handle for m_FrameCount <= 1 skipped RenderSteps as HDRP?
+            // TODO: Should I handle for frameCount <= 1 skipped RenderSteps as HDRP?
 #if UNITY_EDITOR
-            int newCount = m_FrameCount;
+            int newCount = frameCount;
             foreach (var c in cameras)
             {
                 if (c.cameraType != CameraType.Preview)
@@ -497,9 +498,9 @@ namespace UnityEngine.Rendering.Universal
 #else
             int newCount = Time.frameCount;
 #endif
-            if (newCount != m_FrameCount)
+            if (newCount != frameCount)
             {
-                m_FrameCount = newCount;
+                frameCount = newCount;
 
                 RayTracingSystem.CleanUnused();
                 HistoryFrameRTSystem.CleanUnused();
@@ -724,6 +725,10 @@ namespace UnityEngine.Rendering.Universal
             UniversalAdditionalCameraData additionalCameraData = null;
             if (IsGameCamera(camera))
                 camera.gameObject.TryGetComponent(out additionalCameraData);
+#if UNITY_EDITOR
+            else if (camera.cameraType == CameraType.SceneView)
+                additionalCameraData = camera.GetUniversalAdditionalCameraData();
+#endif
 
             RenderSingleCameraInternal(context, camera, ref additionalCameraData);
         }
@@ -1436,7 +1441,7 @@ namespace UnityEngine.Rendering.Universal
                 cameraData.volumeTrigger = null;
                 cameraData.isStopNaNEnabled = false;
                 cameraData.isDitheringEnabled = false;
-                cameraData.antialiasing = AntialiasingMode.None;
+                cameraData.antialiasing = GetSceneViewAntialiasingMode();
                 cameraData.antialiasingQuality = AntialiasingQuality.High;
                 cameraData.xrRendering = false;
                 cameraData.allowHDROutput = false;
@@ -1948,6 +1953,18 @@ namespace UnityEngine.Rendering.Universal
             }
         }
 
+        /// <summary>
+        /// 获取 Scene View 应跟随的主相机抗锯齿模式。
+        /// </summary>
+        static AntialiasingMode GetSceneViewAntialiasingMode()
+        {
+            Camera mainCamera = Camera.main;
+            if (mainCamera != null && mainCamera.TryGetComponent(out UniversalAdditionalCameraData mainCameraData))
+                return mainCameraData.antialiasing;
+
+            return AntialiasingMode.None;
+        }
+
         private static void UpdateTemporalAAData(UniversalCameraData cameraData, UniversalAdditionalCameraData additionalCameraData)
         {
             // Always request the TAA history data here in order to fit the existing URP structure.
@@ -1962,6 +1979,19 @@ namespace UnityEngine.Rendering.Universal
 
             // Update TAA settings
             ref var taaSettings = ref additionalCameraData.taaSettings;
+            if (cameraData.isSceneViewCamera)
+            {
+                Camera mainCamera = Camera.main;
+                if (mainCamera != null && mainCamera.TryGetComponent(out UniversalAdditionalCameraData mainCameraData))
+                {
+                    int resetHistoryFrames = taaSettings.resetHistoryFrames;
+                    int jitterFrameCountOffset = taaSettings.jitterFrameCountOffset;
+                    taaSettings = mainCameraData.taaSettings;
+                    taaSettings.resetHistoryFrames = resetHistoryFrames;
+                    taaSettings.jitterFrameCountOffset = jitterFrameCountOffset;
+                }
+            }
+
             cameraData.taaSettings = taaSettings;
 
             // Decrease history clear counter. Typically clear is only 1 frame, but can be many for XR multipass eyes!

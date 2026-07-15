@@ -717,7 +717,7 @@ namespace UnityEngine.Rendering.Universal
 
                 // Reset the jitter period for consistent test results.
                 // Not technically history, but this is here to avoid adding testing only public API.
-                m_TaaSettings.jitterFrameCountOffset = -Time.frameCount;
+                m_TaaSettings.jitterFrameCountOffset = -UniversalRenderPipeline.frameCount;
             }
         }
 

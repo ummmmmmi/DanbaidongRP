@@ -94,7 +94,7 @@ namespace UnityEngine.Rendering.Universal
 
             // Internal API
             [NonSerialized] internal int resetHistoryFrames;      // Number of frames the history is reset. 0 no reset, 1 normal reset, 2 XR reset, -1 infinite (toggle on)
-            [NonSerialized] internal int jitterFrameCountOffset;  // Jitter "seed" == Time.frameCount + jitterFrameCountOffset. Used for testing determinism.
+            [NonSerialized] internal int jitterFrameCountOffset;  // Jitter seed offset. Used for testing determinism.
 
             /// <summary>
             /// The quality level to use for the temporal anti-aliasing.
@@ -194,7 +194,7 @@ namespace UnityEngine.Rendering.Universal
         {
             // URP supports adding an offset value to the TAA frame index for testing determinism.
             int taaFrameCountOffset = settings.jitterFrameCountOffset;
-            return Time.frameCount + taaFrameCountOffset;
+            return UniversalRenderPipeline.frameCount + taaFrameCountOffset;
         }
 
         internal static Matrix4x4 CalculateJitterMatrix(UniversalCameraData cameraData, JitterFunc jitterFunc)
@@ -388,7 +388,8 @@ namespace UnityEngine.Rendering.Universal
 #if ENABLE_VR && ENABLE_XR_MODULE
                 multipassId = cameraData.xr.multipassId;
 #endif
-                bool isNewFrame = cameraData.taaHistory.GetAccumulationVersion(multipassId) != Time.frameCount;
+                int currentFrameIndex = UniversalRenderPipeline.frameCount;
+                bool isNewFrame = cameraData.taaHistory.GetAccumulationVersion(multipassId) != currentFrameIndex;
 
                 RTHandle taaHistoryAccumulationTex = cameraData.taaHistory.GetAccumulationTexture(multipassId);
                 taaMaterial.SetTexture(ShaderConstants._TaaAccumulationTex, taaHistoryAccumulationTex);
@@ -396,7 +397,7 @@ namespace UnityEngine.Rendering.Universal
                 // On frame rerender or pause, stop all motion using a black motion texture.
                 // This is done to avoid blurring the Taa resolve due to motion and Taa history mismatch.
                 //
-                // Taa history copy is in sync with motion vectors and Time.frameCount, but we updated the TAA history
+                // Taa history copy is in sync with motion vectors and the pipeline frame index, but we updated the TAA history
                 // for the next frame, as we did not know that we're going render this frame again.
                 // We would need history double buffering to solve this properly, but at the cost of memory.
                 //
@@ -435,7 +436,7 @@ namespace UnityEngine.Rendering.Universal
                 {
                     int kHistoryCopyPass = taaMaterial.shader.passCount - 1;
                     Blitter.BlitCameraTexture(cmd, destination, taaHistoryAccumulationTex, RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store, taaMaterial, kHistoryCopyPass);
-                    cameraData.taaHistory.SetAccumulationVersion(multipassId, Time.frameCount);
+                    cameraData.taaHistory.SetAccumulationVersion(multipassId, currentFrameIndex);
                 }
             }
         }
@@ -468,7 +469,8 @@ namespace UnityEngine.Rendering.Universal
 
             ref var taa = ref cameraData.taaSettings;
 
-            bool isNewFrame = cameraData.taaHistory.GetAccumulationVersion(multipassId) != Time.frameCount;
+            int currentFrameIndex = UniversalRenderPipeline.frameCount;
+            bool isNewFrame = cameraData.taaHistory.GetAccumulationVersion(multipassId) != currentFrameIndex;
             float taaInfluence = taa.resetHistoryFrames == 0 ? taa.m_FrameInfluence : 1.0f;
 
             RTHandle accumulationTexture = cameraData.taaHistory.GetAccumulationTexture(multipassId);
@@ -553,7 +555,7 @@ namespace UnityEngine.Rendering.Universal
                     builder.SetRenderFunc((TaaPassData data, RasterGraphContext context) => { Blitter.BlitTexture(context.cmd, data.srcColorTex, Vector2.one, data.material, data.passIndex); });
                 }
 
-                cameraData.taaHistory.SetAccumulationVersion(multipassId, Time.frameCount);
+                cameraData.taaHistory.SetAccumulationVersion(multipassId, currentFrameIndex);
             }
         }
     }
