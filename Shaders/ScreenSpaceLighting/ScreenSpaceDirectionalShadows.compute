@@ -166,21 +166,6 @@ void CLASSIFY_TILES(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupInde
             continue;
         }
 
-        // Reject scene NdotL < 0
-        float4 gbuffer2 = LOAD_TEXTURE2D_X(_GBuffer2, coordSS);
-        float3 normalWS = normalize(UnpackNormal(gbuffer2.xyz));
-        DirectionalLightData dirLight = g_DirectionalLightDatas[0]; // TODO: current only main light.
-        float3 lightDirWS = dirLight.lightDirection;
-        float NdotL = dot(normalWS, lightDirWS);
-        uint stencilVal = GetStencilValue(LOAD_TEXTURE2D_X(_StencilTexture, coordSS)); // ndotl condition not character
-        if ((NdotL < 0) && (stencilVal != SHADINGMODELS_CHARACTER))
-        {
-            _SSDirShadowmapTexture[coordSS] = 0.0;
-            _TracedShadowTexture[coordSS] = 0.0;
-            _ShadowMomentstexture[coordSS] = float3(0.0, 0, 1);
-            continue;
-        }
-
         // Need rays/tiles
         if (coordSS.x < screenSize.x && coordSS.y < screenSize.y)
         {
@@ -223,25 +208,26 @@ void CLASSIFY_TILES(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupInde
             continue;
         }
 
-        // Reject scene NdotL < 0
-        float4 gbuffer2 = LOAD_TEXTURE2D_X(_GBuffer2, coordSS);
-        float3 normalWS = normalize(UnpackNormal(gbuffer2.xyz));
-        DirectionalLightData dirLight = g_DirectionalLightDatas[0]; // TODO: current only main light.
-        float3 lightDirWS = dirLight.lightDirection;
-        float NdotL = dot(normalWS, lightDirWS);
-        uint stencilVal = GetStencilValue(LOAD_TEXTURE2D_X(_StencilTexture, coordSS)); // ndotl condition not character
-        if ((NdotL < 0) && (stencilVal != SHADINGMODELS_CHARACTER))
-        {
-            _SSDirShadowmapTexture[coordSS] = 0.0;
-            continue;
-        }
-
         // Position
         PositionInputs posInput = GetPositionInput(coordSS.xy, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V, uint2(0, 0));
         float3 positionWS = posInput.positionWS;
-        float cascadeIndex = ComputeCascadeIndex(positionWS);
-        float4 shadowCoord = mul(_MainLightWorldToShadow[cascadeIndex], float4(positionWS, 1.0));
+        float4 shadowCoord = TransformWorldToShadowCoord(positionWS);
+        float cascadeIndex = shadowCoord.w;
+        if (cascadeIndex >= MAX_SHADOW_CASCADES)
+        {
+            _SSDirShadowmapTexture[coordSS] = 1.0;
+            continue;
+        }
+
         bool isNotDistFar = GetMainLightShadowFade(positionWS) < 1;
+
+        if (_MainLightShadowParams.y <= 0.0)
+        {
+            float shadowMapDepth = SAMPLE_TEXTURE2D_ARRAY_LOD(_DirShadowmapTexture, sampler_PointClamp, shadowCoord.xy, cascadeIndex, 0).x;
+            bool isBlocked = COMPARE_DEVICE_DEPTH_CLOSER(shadowMapDepth, shadowCoord.z);
+            _SSDirShadowmapTexture[coordSS] = (isBlocked && isNotDistFar) ? 0.0 : 1.0;
+            continue;
+        }
 
         float radial2ShadowmapDepth = _PerCascadePCSSData[cascadeIndex].x;
         float texelSizeWS           = _PerCascadePCSSData[cascadeIndex].y;
@@ -317,8 +303,13 @@ void PCSS_FILTER(uint3 dispatchThreadId : SV_DispatchThreadID, uint2 groupThread
     // Position
     PositionInputs posInput = GetPositionInput(coordSS.xy, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V, uint2(0, 0));
     float3 positionWS = posInput.positionWS;
-    float cascadeIndex = ComputeCascadeIndex(positionWS);
-    float4 shadowCoord = mul(_MainLightWorldToShadow[cascadeIndex], float4(positionWS, 1.0));
+    float4 shadowCoord = TransformWorldToShadowCoord(positionWS);
+    float cascadeIndex = shadowCoord.w;
+    if (cascadeIndex >= MAX_SHADOW_CASCADES)
+    {
+        _PCSSTexture[coordSS] = 1.0;
+        return;
+    }
 
     float radial2ShadowmapDepth = _PerCascadePCSSData[cascadeIndex].x;
     float texelSizeWS           = _PerCascadePCSSData[cascadeIndex].y;

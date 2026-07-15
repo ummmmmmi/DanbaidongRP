@@ -859,6 +859,7 @@ namespace UnityEngine.Rendering.Universal.Internal
         {
             if (!m_CreateEmptyShadowmap)
             {
+                bool useNativeShadowCasterCulling = ShadowCulling.UsesNativeShadowCasterCulling(passData.shadowData);
                 for (int globalShadowSliceIndex = 0; globalShadowSliceIndex < m_ShadowSliceToAdditionalLightIndex.Count; ++globalShadowSliceIndex)
                 {
                     int additionalLightIndex = m_ShadowSliceToAdditionalLightIndex[globalShadowSliceIndex];
@@ -867,6 +868,9 @@ namespace UnityEngine.Rendering.Universal.Internal
 
                     var settings = new ShadowDrawingSettings(cullResults, visibleLightIndex);
                     settings.useRenderingLayerMaskTest = UniversalRenderPipeline.asset.useRenderingLayers;
+                    if (!useNativeShadowCasterCulling)
+                        settings.splitData = shadowSliceData.splitData;
+
                     if(useRenderGraph)
                         passData.shadowRendererListsHdl[globalShadowSliceIndex] = renderGraph.CreateShadowRendererList(ref settings);
                     else

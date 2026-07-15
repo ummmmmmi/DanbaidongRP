@@ -133,8 +133,19 @@ namespace UnityEngine.Rendering.Universal
         /// <returns>True if the matrix was successfully extracted.</returns>
         public static bool ExtractDirectionalLightMatrix(ref CullingResults cullResults, UniversalShadowData shadowData, int shadowLightIndex, int cascadeIndex, int shadowmapWidth, int shadowmapHeight, int shadowResolution, float shadowNearPlane, out Vector4 cascadeSplitDistance, out ShadowSliceData shadowSliceData, bool useAtlas = false)
         {
+            int engineCascadeIndex = cascadeIndex;
+            int engineCascadeCount = shadowData.mainLightShadowCascadesCount;
+            Vector3 engineCascadeSplits = shadowData.mainLightShadowCascadesSplit;
+
+            if (engineCascadeCount > 4)
+            {
+                GetExtendedCascadeMatrixParameters(shadowData, cascadeIndex,
+                    out engineCascadeIndex, out engineCascadeSplits);
+                engineCascadeCount = 4;
+            }
+
             bool success = cullResults.ComputeDirectionalShadowMatricesAndCullingPrimitives(shadowLightIndex,
-                cascadeIndex, shadowData.mainLightShadowCascadesCount, shadowData.mainLightShadowCascadesSplit, shadowResolution, shadowNearPlane, out shadowSliceData.viewMatrix, out shadowSliceData.projectionMatrix,
+                engineCascadeIndex, engineCascadeCount, engineCascadeSplits, shadowResolution, shadowNearPlane, out shadowSliceData.viewMatrix, out shadowSliceData.projectionMatrix,
                 out shadowSliceData.splitData);
 
             cascadeSplitDistance = shadowSliceData.splitData.cullingSphere;
@@ -153,6 +164,50 @@ namespace UnityEngine.Rendering.Universal
                 ApplySliceTransform(ref shadowSliceData, shadowmapWidth, shadowmapHeight);
 
             return success;
+        }
+
+        /// <summary>
+        /// 将五至八级级联中的一个区间映射到 Unity 原生四级级联接口。
+        /// </summary>
+        static void GetExtendedCascadeMatrixParameters(UniversalShadowData shadowData, int cascadeIndex,
+            out int engineCascadeIndex, out Vector3 engineCascadeSplits)
+        {
+            int cascadeCount = shadowData.mainLightShadowCascadesCount;
+
+            if (cascadeIndex == 0)
+            {
+                engineCascadeIndex = 0;
+                engineCascadeSplits = new Vector3(
+                    GetCascadeSplit(shadowData, 0),
+                    GetCascadeSplit(shadowData, 1),
+                    GetCascadeSplit(shadowData, 2));
+                return;
+            }
+
+            if (cascadeIndex == cascadeCount - 1)
+            {
+                engineCascadeIndex = 3;
+                engineCascadeSplits = new Vector3(
+                    GetCascadeSplit(shadowData, cascadeIndex - 3),
+                    GetCascadeSplit(shadowData, cascadeIndex - 2),
+                    GetCascadeSplit(shadowData, cascadeIndex - 1));
+                return;
+            }
+
+            float nearSplit = GetCascadeSplit(shadowData, cascadeIndex - 1);
+            float farSplit = GetCascadeSplit(shadowData, cascadeIndex);
+            engineCascadeIndex = 1;
+            engineCascadeSplits = new Vector3(nearSplit, farSplit, Mathf.Lerp(farSplit, 1.0f, 0.5f));
+        }
+
+        /// <summary>
+        /// 返回指定索引的归一化级联分割位置。
+        /// </summary>
+        static float GetCascadeSplit(UniversalShadowData shadowData, int splitIndex)
+        {
+            return splitIndex < 4
+                ? shadowData.mainLightShadowCascadesSplit0[splitIndex]
+                : shadowData.mainLightShadowCascadesSplit1[splitIndex - 4];
         }
 
         /// <summary>

@@ -245,6 +245,10 @@ half3 CalculateDebugShadowCascadeColor(in InputData inputData)
         case 1: return kDebugColorShadowCascade1.rgb;
         case 2: return kDebugColorShadowCascade2.rgb;
         case 3: return kDebugColorShadowCascade3.rgb;
+        case 4: return half3(1.0, 0.2, 0.8);
+        case 5: return half3(0.2, 1.0, 0.8);
+        case 6: return half3(1.0, 0.8, 0.2);
+        case 7: return half3(0.6, 0.4, 1.0);
         default: return kDebugColorBlack.rgb;
     }
 }

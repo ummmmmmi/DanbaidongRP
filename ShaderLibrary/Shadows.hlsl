@@ -7,7 +7,7 @@
 #include "Core.hlsl"
 #include "Shadows.deprecated.hlsl"
 
-#define MAX_SHADOW_CASCADES 4
+#define MAX_SHADOW_CASCADES 8
 
 #if !defined(_RECEIVE_SHADOWS_OFF)
     #if defined(_MAIN_LIGHT_SHADOWS) || defined(_MAIN_LIGHT_SHADOWS_CASCADE) || defined(_MAIN_LIGHT_SHADOWS_SCREEN)
@@ -70,11 +70,8 @@ CBUFFER_START(LightShadows)
 // shadow coord to half3(0, 0, NEAR_PLANE). We use this trick to avoid
 // branching since ComputeCascadeIndex can return cascade index = MAX_SHADOW_CASCADES
 float4x4    _MainLightWorldToShadow[MAX_SHADOW_CASCADES + 1];
-float4      _CascadeShadowSplitSpheres0;
-float4      _CascadeShadowSplitSpheres1;
-float4      _CascadeShadowSplitSpheres2;
-float4      _CascadeShadowSplitSpheres3;
-float4      _CascadeShadowSplitSphereRadii;
+float4      _CascadeShadowSplitSpheres[MAX_SHADOW_CASCADES];
+float4      _CascadeShadowSplitSphereRadii[MAX_SHADOW_CASCADES / 4];
 
 float4      _PerCascadePCSSData[MAX_SHADOW_CASCADES];
 
@@ -428,16 +425,22 @@ real SampleShadowmapArray(TEXTURE2D_ARRAY_SHADOW_PARAM(ShadowMap, sampler_Shadow
 
 half ComputeCascadeIndex(float3 positionWS)
 {
-    float3 fromCenter0 = positionWS - _CascadeShadowSplitSpheres0.xyz;
-    float3 fromCenter1 = positionWS - _CascadeShadowSplitSpheres1.xyz;
-    float3 fromCenter2 = positionWS - _CascadeShadowSplitSpheres2.xyz;
-    float3 fromCenter3 = positionWS - _CascadeShadowSplitSpheres3.xyz;
-    float4 distances2 = float4(dot(fromCenter0, fromCenter0), dot(fromCenter1, fromCenter1), dot(fromCenter2, fromCenter2), dot(fromCenter3, fromCenter3));
+    half cascadeIndex = half(MAX_SHADOW_CASCADES);
 
-    half4 weights = half4(distances2 < _CascadeShadowSplitSphereRadii);
-    weights.yzw = saturate(weights.yzw - weights.xyz);
+    UNITY_UNROLL
+    for (uint i = 0; i < MAX_SHADOW_CASCADES; ++i)
+    {
+        float3 fromCenter = positionWS - _CascadeShadowSplitSpheres[i].xyz;
+        float distance2 = dot(fromCenter, fromCenter);
+        float radius2 = _CascadeShadowSplitSphereRadii[i / 4][i % 4];
+        if (distance2 < radius2)
+        {
+            cascadeIndex = half(i);
+            break;
+        }
+    }
 
-    return half(4.0) - dot(weights, half4(4, 3, 2, 1));
+    return cascadeIndex;
 }
 
 float4 TransformWorldToShadowCoord(float3 positionWS)
@@ -460,6 +463,9 @@ half MainLightRealtimeShadow(float4 shadowCoord)
     #elif defined(_MAIN_LIGHT_SHADOWS_SCREEN) && !defined(_SURFACE_TYPE_TRANSPARENT)
         return SampleScreenSpaceShadowmap(shadowCoord);
     #else
+        if (shadowCoord.w >= MAX_SHADOW_CASCADES)
+            return half(1.0);
+
         ShadowSamplingData shadowSamplingData = GetMainLightShadowSamplingData();
         half4 shadowParams = GetMainLightShadowParams();
         return SampleShadowmapArray(TEXTURE2D_ARRAY_ARGS(_DirectionalLightsShadowmapTexture, sampler_LinearClampCompare), shadowCoord, shadowSamplingData, shadowParams, false);

@@ -14,7 +14,17 @@ namespace UnityEngine.Rendering.Universal
 
     internal static class ShadowCulling
     {
+        const int MAX_NATIVE_SHADOW_SPLIT_COUNT = 6;
+
         static readonly ProfilingSampler computeShadowCasterCullingInfosMarker = new ProfilingSampler($"{nameof(UniversalRenderPipeline)}.{nameof(ComputeShadowCasterCullingInfos)}");
+
+        /// <summary>
+        /// 判断当前阴影配置是否使用 Unity 原生的阴影投射物剔除。
+        /// </summary>
+        public static bool UsesNativeShadowCasterCulling(UniversalShadowData shadowData)
+        {
+            return !shadowData.supportsMainLightShadows || shadowData.mainLightShadowCascadesCount <= MAX_NATIVE_SHADOW_SPLIT_COUNT;
+        }
 
         public static NativeArray<URPLightShadowCullingInfos> CullShadowCasters(ref ScriptableRenderContext context,
             UniversalShadowData shadowData,
@@ -25,7 +35,8 @@ namespace UnityEngine.Rendering.Universal
             NativeArray<URPLightShadowCullingInfos> urpVisibleLightsShadowCullingInfos;
             ComputeShadowCasterCullingInfos(shadowData, ref shadowAtlasLayout, ref cullResults, out shadowCullingInfos, out urpVisibleLightsShadowCullingInfos);
 
-            context.CullShadowCasters(cullResults, shadowCullingInfos);
+            if (UsesNativeShadowCasterCulling(shadowData) && shadowCullingInfos.splitBuffer.Length > 0)
+                context.CullShadowCasters(cullResults, shadowCullingInfos);
 
             return urpVisibleLightsShadowCullingInfos;
         }
@@ -36,11 +47,12 @@ namespace UnityEngine.Rendering.Universal
             out ShadowCastersCullingInfos shadowCullingInfos,
             out NativeArray<URPLightShadowCullingInfos> urpVisibleLightsShadowCullingInfos)
         {
-            const int MaxShadowSplitCount = 6;
             using var profScope = new ProfilingScope(computeShadowCasterCullingInfosMarker);
 
+            bool useNativeShadowCasterCulling = UsesNativeShadowCasterCulling(shadowData);
+
             NativeArray<VisibleLight> visibleLights = cullingResults.visibleLights;
-            NativeArray<ShadowSplitData> splitBuffer = new NativeArray<ShadowSplitData>(visibleLights.Length * MaxShadowSplitCount, Allocator.Temp);
+            NativeArray<ShadowSplitData> splitBuffer = new NativeArray<ShadowSplitData>(visibleLights.Length * MAX_NATIVE_SHADOW_SPLIT_COUNT, Allocator.Temp);
             NativeArray<LightShadowCasterCullingInfo> perLightInfos = new NativeArray<LightShadowCasterCullingInfo>(visibleLights.Length, Allocator.Temp);
             urpVisibleLightsShadowCullingInfos = new NativeArray<URPLightShadowCullingInfos>(visibleLights.Length, Allocator.Temp);
 
@@ -54,6 +66,7 @@ namespace UnityEngine.Rendering.Universal
 
                 NativeArray<ShadowSliceData> slices = default;
                 uint slicesValidMask = 0;
+                int nativeSplitCount = 0;
 
                 if (lightType == LightType.Directional)
                 {
@@ -67,7 +80,6 @@ namespace UnityEngine.Rendering.Universal
 
                     slices = new NativeArray<ShadowSliceData>(splitCount, Allocator.Temp);
                     slicesValidMask = 0;
-
                     for (int i = 0; i < splitCount; ++i)
                     {
                         ShadowSliceData slice = default;
@@ -80,8 +92,11 @@ namespace UnityEngine.Rendering.Universal
                             slicesValidMask |= 1u << i;
 
                         slices[i] = slice;
-                        splitBuffer[splitBufferOffset + i] = slice.splitData;
+                        if (useNativeShadowCasterCulling)
+                            splitBuffer[splitBufferOffset + i] = slice.splitData;
                     }
+
+                    nativeSplitCount = useNativeShadowCasterCulling ? splitCount : 0;
                 }
                 else if (lightType == LightType.Point)
                 {
@@ -115,8 +130,11 @@ namespace UnityEngine.Rendering.Universal
                             slicesValidMask |= 1u << i;
 
                         slices[i] = slice;
-                        splitBuffer[splitBufferOffset + i] = slice.splitData;
+                        if (useNativeShadowCasterCulling)
+                            splitBuffer[splitBufferOffset + i] = slice.splitData;
                     }
+
+                    nativeSplitCount = useNativeShadowCasterCulling ? splitCount : 0;
                 }
                 else if (lightType == LightType.Spot)
                 {
@@ -139,7 +157,9 @@ namespace UnityEngine.Rendering.Universal
                         slicesValidMask |= 1u << 0;
 
                     slices[0] = slice;
-                    splitBuffer[splitBufferOffset + 0] = slice.splitData;
+                    if (useNativeShadowCasterCulling)
+                        splitBuffer[splitBufferOffset] = slice.splitData;
+                    nativeSplitCount = useNativeShadowCasterCulling ? 1 : 0;
                 }
 
                 URPLightShadowCullingInfos infos = default;
@@ -149,11 +169,11 @@ namespace UnityEngine.Rendering.Universal
                 urpVisibleLightsShadowCullingInfos[lightIndex] = infos;
                 perLightInfos[lightIndex] = new LightShadowCasterCullingInfo
                 {
-                    splitRange = new RangeInt(splitBufferOffset, slices.Length),
+                    splitRange = new RangeInt(splitBufferOffset, nativeSplitCount),
                     projectionType = GetCullingProjectionType(lightType),
                 };
-                splitBufferOffset += slices.Length;
-                totalSplitCount += slices.Length;
+                splitBufferOffset += nativeSplitCount;
+                totalSplitCount += nativeSplitCount;
             }
 
             shadowCullingInfos = default;

@@ -13,10 +13,7 @@ namespace UnityEngine.Rendering.Universal.Internal
         {
             public static int _WorldToShadow;
             public static int _ShadowParams;
-            public static int _CascadeShadowSplitSpheres0;
-            public static int _CascadeShadowSplitSpheres1;
-            public static int _CascadeShadowSplitSpheres2;
-            public static int _CascadeShadowSplitSpheres3;
+            public static int _CascadeShadowSplitSpheres;
             public static int _CascadeShadowSplitSphereRadii;
             public static int _ShadowOffset0;
             public static int _ShadowOffset1;
@@ -27,7 +24,7 @@ namespace UnityEngine.Rendering.Universal.Internal
             public static int _PerCascadePCSSData;
         }
 
-        const int k_MaxCascades = 4;
+        const int k_MaxCascades = 8;
         const int k_ShadowmapBufferBits = 16;
         float m_CascadeBorder;
         float m_MaxShadowDistanceSq;
@@ -43,6 +40,7 @@ namespace UnityEngine.Rendering.Universal.Internal
         Matrix4x4[] m_MainLightShadowMatrices;
         ShadowSliceData[] m_CascadeSlices;
         Vector4[] m_CascadeSplitDistances;
+        Vector4[] m_CascadeSplitSphereRadii;
         Vector4[] m_PerCascadePCSSData;
 
         bool m_CreateEmptyShadowmap;
@@ -72,14 +70,12 @@ namespace UnityEngine.Rendering.Universal.Internal
             m_MainLightShadowMatrices = new Matrix4x4[k_MaxCascades + 1];
             m_CascadeSlices = new ShadowSliceData[k_MaxCascades];
             m_CascadeSplitDistances = new Vector4[k_MaxCascades];
+            m_CascadeSplitSphereRadii = new Vector4[k_MaxCascades / 4];
             m_PerCascadePCSSData = new Vector4[k_MaxCascades];
 
             DirectionalLightsShadowConstantBuffer._WorldToShadow = Shader.PropertyToID("_MainLightWorldToShadow");
             DirectionalLightsShadowConstantBuffer._ShadowParams = Shader.PropertyToID("_MainLightShadowParams");
-            DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres0 = Shader.PropertyToID("_CascadeShadowSplitSpheres0");
-            DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres1 = Shader.PropertyToID("_CascadeShadowSplitSpheres1");
-            DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres2 = Shader.PropertyToID("_CascadeShadowSplitSpheres2");
-            DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres3 = Shader.PropertyToID("_CascadeShadowSplitSpheres3");
+            DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres = Shader.PropertyToID("_CascadeShadowSplitSpheres");
             DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSphereRadii = Shader.PropertyToID("_CascadeShadowSplitSphereRadii");
             DirectionalLightsShadowConstantBuffer._ShadowOffset0 = Shader.PropertyToID("_MainLightShadowOffset0");
             DirectionalLightsShadowConstantBuffer._ShadowOffset1 = Shader.PropertyToID("_MainLightShadowOffset1");
@@ -199,6 +195,9 @@ namespace UnityEngine.Rendering.Universal.Internal
             for (int i = 0; i < m_CascadeSplitDistances.Length; ++i)
                 m_CascadeSplitDistances[i] = new Vector4(0.0f, 0.0f, 0.0f, 0.0f);
 
+            for (int i = 0; i < m_CascadeSplitSphereRadii.Length; ++i)
+                m_CascadeSplitSphereRadii[i] = Vector4.zero;
+
             for (int i = 0; i < m_CascadeSlices.Length; ++i)
                 m_CascadeSlices[i].Clear();
 
@@ -314,19 +313,20 @@ namespace UnityEngine.Rendering.Universal.Internal
 
             if (m_ShadowCasterCascadesCount > 1)
             {
-                cmd.SetGlobalVector(DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres0,
-                    m_CascadeSplitDistances[0]);
-                cmd.SetGlobalVector(DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres1,
-                    m_CascadeSplitDistances[1]);
-                cmd.SetGlobalVector(DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres2,
-                    m_CascadeSplitDistances[2]);
-                cmd.SetGlobalVector(DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres3,
-                    m_CascadeSplitDistances[3]);
-                cmd.SetGlobalVector(DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSphereRadii, new Vector4(
-                    m_CascadeSplitDistances[0].w * m_CascadeSplitDistances[0].w,
-                    m_CascadeSplitDistances[1].w * m_CascadeSplitDistances[1].w,
-                    m_CascadeSplitDistances[2].w * m_CascadeSplitDistances[2].w,
-                    m_CascadeSplitDistances[3].w * m_CascadeSplitDistances[3].w));
+                Vector4 lastCascadeSphere = m_CascadeSplitDistances[m_ShadowCasterCascadesCount - 1];
+                for (int i = m_ShadowCasterCascadesCount; i < k_MaxCascades; ++i)
+                    m_CascadeSplitDistances[i] = lastCascadeSphere;
+
+                for (int i = 0; i < k_MaxCascades; ++i)
+                {
+                    int radiusGroup = i / 4;
+                    Vector4 radii = m_CascadeSplitSphereRadii[radiusGroup];
+                    radii[i % 4] = m_CascadeSplitDistances[i].w * m_CascadeSplitDistances[i].w;
+                    m_CascadeSplitSphereRadii[radiusGroup] = radii;
+                }
+
+                cmd.SetGlobalVectorArray(DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres, m_CascadeSplitDistances);
+                cmd.SetGlobalVectorArray(DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSphereRadii, m_CascadeSplitSphereRadii);
             }
 
             // Inside shader soft shadows are controlled through global keyword.
@@ -421,8 +421,12 @@ namespace UnityEngine.Rendering.Universal.Internal
             {
                 var settings = new ShadowDrawingSettings(passData.renderingData.cullResults, shadowLightIndex);
                 settings.useRenderingLayerMaskTest = UniversalRenderPipeline.asset.useRenderingLayers;
+                bool useNativeShadowCasterCulling = ShadowCulling.UsesNativeShadowCasterCulling(passData.shadowData);
                 for (int cascadeIndex = 0; cascadeIndex < m_ShadowCasterCascadesCount; ++cascadeIndex)
                 {
+                    if (!useNativeShadowCasterCulling)
+                        settings.splitData = m_CascadeSlices[cascadeIndex].splitData;
+
                     if (useRenderGraph)
                         passData.shadowRendererListsHandle[cascadeIndex] = renderGraph.CreateShadowRendererList(ref settings);
                     else

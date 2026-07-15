@@ -63,6 +63,7 @@ namespace UnityEditor.Rendering.Universal
         public SerializedProperty shadowCascade2SplitProp { get; }
         public SerializedProperty shadowCascade3SplitProp { get; }
         public SerializedProperty shadowCascade4SplitProp { get; }
+        public SerializedProperty shadowCascadeSplitLambdaProp { get; }
         public SerializedProperty shadowCascadeBorderProp { get; }
         public SerializedProperty shadowDepthBiasProp { get; }
         public SerializedProperty shadowNormalBiasProp { get; }
@@ -165,6 +166,7 @@ namespace UnityEditor.Rendering.Universal
             shadowCascade2SplitProp = serializedObject.FindProperty("m_Cascade2Split");
             shadowCascade3SplitProp = serializedObject.FindProperty("m_Cascade3Split");
             shadowCascade4SplitProp = serializedObject.FindProperty("m_Cascade4Split");
+            shadowCascadeSplitLambdaProp = serializedObject.FindProperty("m_CascadeSplitLambda");
             shadowCascadeBorderProp = serializedObject.FindProperty("m_CascadeBorder");
             shadowDepthBiasProp = serializedObject.FindProperty("m_ShadowDepthBias");
             shadowNormalBiasProp = serializedObject.FindProperty("m_ShadowNormalBias");

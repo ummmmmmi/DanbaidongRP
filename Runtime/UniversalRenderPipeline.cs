@@ -1719,6 +1719,8 @@ namespace UnityEngine.Rendering.Universal
             shadowData.mainLightShadowCascadeBorder = urpAsset.cascadeBorder;
             shadowData.mainLightShadowCascadesCount = urpAsset.shadowCascadeCount;
             shadowData.mainLightShadowCascadesSplit = GetMainLightCascadeSplit(shadowData.mainLightShadowCascadesCount, urpAsset);
+            GetMainLightCascadeSplits(shadowData.mainLightShadowCascadesCount, urpAsset, cameraData,
+                out shadowData.mainLightShadowCascadesSplit0, out shadowData.mainLightShadowCascadesSplit1);
             shadowData.mainLightShadowmapWidth = urpAsset.mainLightShadowmapResolution;
             shadowData.mainLightShadowmapHeight = urpAsset.mainLightShadowmapResolution;
             shadowData.additionalLightsShadowmapWidth = shadowData.additionalLightsShadowmapHeight = urpAsset.additionalLightsShadowmapResolution;
@@ -1860,11 +1862,54 @@ namespace UnityEngine.Rendering.Universal
             }
         }
 
+        /// <summary>
+        /// 计算最多八级方向光阴影使用的稳定 PSSM 分割位置。
+        /// </summary>
+        private static void GetMainLightCascadeSplits(int cascadeCount, UniversalRenderPipelineAsset urpAsset,
+            UniversalCameraData cameraData, out Vector4 splits0, out Vector4 splits1)
+        {
+            splits0 = Vector4.one;
+            splits1 = Vector4.one;
+
+            if (cascadeCount <= 1)
+                return;
+
+            if (cascadeCount <= 4)
+            {
+                Vector3 legacySplits = GetMainLightCascadeSplit(cascadeCount, urpAsset);
+                for (int i = 0; i < cascadeCount - 1; ++i)
+                    splits0[i] = legacySplits[i];
+                return;
+            }
+
+            Camera camera = cameraData.camera;
+            float nearDistance = Mathf.Max(camera.nearClipPlane, 0.001f);
+            float farDistance = Mathf.Max(nearDistance + 0.001f,
+                Mathf.Min(cameraData.maxShadowDistance, camera.farClipPlane));
+            float distanceRange = farDistance - nearDistance;
+            float lambda = camera.orthographic ? 0.0f : urpAsset.cascadeSplitLambda;
+
+            for (int i = 1; i < cascadeCount; ++i)
+            {
+                float splitRatio = i / (float)cascadeCount;
+                float logarithmicDistance = nearDistance * Mathf.Pow(farDistance / nearDistance, splitRatio);
+                float linearDistance = nearDistance + distanceRange * splitRatio;
+                float splitDistance = Mathf.Lerp(linearDistance, logarithmicDistance, lambda);
+                float normalizedSplit = Mathf.Clamp01((splitDistance - nearDistance) / distanceRange);
+
+                if (i <= 4)
+                    splits0[i - 1] = normalizedSplit;
+                else
+                    splits1[i - 5] = normalizedSplit;
+            }
+        }
+
         static void InitializeMainLightShadowResolution(UniversalShadowData shadowData)
         {
-            shadowData.mainLightShadowResolution = ShadowUtils.GetMaxTileResolutionInAtlas(shadowData.mainLightShadowmapWidth, shadowData.mainLightShadowmapHeight, shadowData.mainLightShadowCascadesCount);
+            // Directional shadows use one full-resolution Texture2DArray slice per cascade.
+            shadowData.mainLightShadowResolution = Mathf.Min(shadowData.mainLightShadowmapWidth, shadowData.mainLightShadowmapHeight);
             shadowData.mainLightRenderTargetWidth = shadowData.mainLightShadowmapWidth;
-            shadowData.mainLightRenderTargetHeight = (shadowData.mainLightShadowCascadesCount == 2) ? shadowData.mainLightShadowmapHeight >> 1 : shadowData.mainLightShadowmapHeight;
+            shadowData.mainLightRenderTargetHeight = shadowData.mainLightShadowmapHeight;
         }
 
         static UniversalPostProcessingData CreatePostProcessingData(ContextContainer frameData, UniversalRenderPipelineAsset settings)
@@ -2453,7 +2498,7 @@ namespace UnityEngine.Rendering.Universal
             shadowData.mainLightShadowmapHeight = (int)(shadowData.mainLightShadowmapHeight * MainLightShadowmapResolutionMultiplier);
 
             var MainLightShadowCascadesCountBias = AdaptivePerformance.AdaptivePerformanceRenderSettings.MainLightShadowCascadesCountBias;
-            shadowData.mainLightShadowCascadesCount = Mathf.Clamp(shadowData.mainLightShadowCascadesCount - MainLightShadowCascadesCountBias, 0, 4);
+            shadowData.mainLightShadowCascadesCount = Mathf.Clamp(shadowData.mainLightShadowCascadesCount - MainLightShadowCascadesCountBias, 0, UniversalRenderPipelineAsset.k_ShadowCascadeMaxCount);
 
             var shadowQualityIndex = AdaptivePerformance.AdaptivePerformanceRenderSettings.ShadowQualityBias;
             for (int i = 0; i < shadowQualityIndex; i++)

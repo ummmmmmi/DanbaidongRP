@@ -652,6 +652,12 @@ namespace UnityEngine.Rendering.Universal
         /// </summary>
         public ref Vector3 mainLightShadowCascadesSplit => ref frameData.Get<UniversalShadowData>().mainLightShadowCascadesSplit;
 
+        /// <summary>前四个归一化级联分割位置。</summary>
+        public ref Vector4 mainLightShadowCascadesSplit0 => ref frameData.Get<UniversalShadowData>().mainLightShadowCascadesSplit0;
+
+        /// <summary>后四个归一化级联分割位置。</summary>
+        public ref Vector4 mainLightShadowCascadesSplit1 => ref frameData.Get<UniversalShadowData>().mainLightShadowCascadesSplit1;
+
         /// <summary>
         /// Main light last cascade shadow fade border.
         /// Value represents the width of shadow fade that ranges from 0 to 1.

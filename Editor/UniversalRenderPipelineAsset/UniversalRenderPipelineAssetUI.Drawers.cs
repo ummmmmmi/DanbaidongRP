@@ -428,7 +428,8 @@ namespace UnityEditor.Rendering.Universal
             DrawCascadeSliders(serialized, cascadeSplitCount, useMetric, baseMetric);
 
             EditorGUI.indentLevel--;
-            DrawCascades(serialized, cascadeCount, useMetric, baseMetric);
+            if (cascadeCount <= 4)
+                DrawCascades(serialized, cascadeCount, useMetric, baseMetric);
             EditorGUI.indentLevel++;
 
             serialized.shadowDepthBiasProp.floatValue = EditorGUILayout.Slider(Styles.shadowDepthBias, serialized.shadowDepthBiasProp.floatValue, 0.0f, UniversalRenderPipeline.maxShadowBias);
@@ -469,6 +470,18 @@ namespace UnityEditor.Rendering.Universal
 
         static void DrawCascadeSliders(SerializedUniversalRenderPipelineAsset serialized, int splitCount, bool useMetric, float baseMetric)
         {
+            if (splitCount > 3)
+            {
+                serialized.shadowCascadeSplitLambdaProp.floatValue = EditorGUILayout.Slider(
+                    EditorGUIUtility.TrTextContent("PSSM Lambda", "五级及以上级联使用的线性与对数分割混合权重。"),
+                    serialized.shadowCascadeSplitLambdaProp.floatValue, 0.0f, 1.0f);
+                serialized.shadowCascadeBorderProp.floatValue = EditorGUILayout.Slider(
+                    EditorGUIUtility.TrTextContent("Last Border", "最后一级阴影的淡出比例。"),
+                    serialized.shadowCascadeBorderProp.floatValue, 0.0f, 1.0f);
+                EditorGUILayout.HelpBox("五级及以上级联使用稳定 PSSM 自动分割；实际距离由相机近裁剪面和阴影距离决定。", MessageType.Info);
+                return;
+            }
+
             Vector4 shadowCascadeSplit = Vector4.one;
             if (splitCount == 3)
                 shadowCascadeSplit = new Vector4(serialized.shadowCascade4SplitProp.vector3Value.x, serialized.shadowCascade4SplitProp.vector3Value.y, serialized.shadowCascade4SplitProp.vector3Value.z, 1);

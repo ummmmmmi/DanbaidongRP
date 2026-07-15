@@ -45,6 +45,16 @@ namespace UnityEngine.Rendering.Universal
         public Vector3 mainLightShadowCascadesSplit;
 
         /// <summary>
+        /// 前四个归一化级联分割位置。
+        /// </summary>
+        public Vector4 mainLightShadowCascadesSplit0;
+
+        /// <summary>
+        /// 后四个归一化级联分割位置。
+        /// </summary>
+        public Vector4 mainLightShadowCascadesSplit1;
+
+        /// <summary>
         /// Main light last cascade shadow fade border.
         /// Value represents the width of shadow fade that ranges from 0 to 1.
         /// Where value 0 is used for no shadow fade.
@@ -119,6 +129,8 @@ namespace UnityEngine.Rendering.Universal
             mainLightShadowmapHeight = 0;
             mainLightShadowCascadesCount = 0;
             mainLightShadowCascadesSplit = Vector3.zero;
+            mainLightShadowCascadesSplit0 = Vector4.one;
+            mainLightShadowCascadesSplit1 = Vector4.one;
             mainLightShadowCascadeBorder = 0.0f;
             supportsAdditionalLightShadows = false;
             additionalLightsShadowmapWidth = 0;

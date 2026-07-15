@@ -24,6 +24,7 @@ namespace UnityEngine.Rendering.Universal.Internal
         private PassData m_PassData;
         private RTHandle m_EmptyMainLightShadowmapTexture;
         private Vector4[] m_CascadeSplitDistances;
+        private Vector4[] m_CascadeSplitSphereRadii;
         private Matrix4x4[] m_MainLightShadowMatrices;
         private ProfilingSampler m_ProfilingSetupSampler = new ("Setup Main Shadowmap");
         private ShadowSliceData[] m_CascadeSlices;
@@ -31,7 +32,7 @@ namespace UnityEngine.Rendering.Universal.Internal
 
         // Constants and Statics
         private const int k_EmptyShadowMapDimensions = 1;
-        private const int k_MaxCascades = 4;
+        private const int k_MaxCascades = 8;
         private const int k_ShadowmapBufferBits = 16;
         private const string k_MainLightShadowMapTextureName = "_MainLightShadowmapTexture";
         private const string k_EmptyMainLightShadowMapTextureName = "_EmptyMainLightShadowmapTexture";
@@ -43,10 +44,7 @@ namespace UnityEngine.Rendering.Universal.Internal
         {
             public static readonly int _WorldToShadow = Shader.PropertyToID("_MainLightWorldToShadow");
             public static readonly int _ShadowParams = Shader.PropertyToID("_MainLightShadowParams");
-            public static readonly int _CascadeShadowSplitSpheres0 = Shader.PropertyToID("_CascadeShadowSplitSpheres0");
-            public static readonly int _CascadeShadowSplitSpheres1 = Shader.PropertyToID("_CascadeShadowSplitSpheres1");
-            public static readonly int _CascadeShadowSplitSpheres2 = Shader.PropertyToID("_CascadeShadowSplitSpheres2");
-            public static readonly int _CascadeShadowSplitSpheres3 = Shader.PropertyToID("_CascadeShadowSplitSpheres3");
+            public static readonly int _CascadeShadowSplitSpheres = Shader.PropertyToID("_CascadeShadowSplitSpheres");
             public static readonly int _CascadeShadowSplitSphereRadii = Shader.PropertyToID("_CascadeShadowSplitSphereRadii");
             public static readonly int _ShadowOffset0 = Shader.PropertyToID("_MainLightShadowOffset0");
             public static readonly int _ShadowOffset1 = Shader.PropertyToID("_MainLightShadowOffset1");
@@ -84,6 +82,7 @@ namespace UnityEngine.Rendering.Universal.Internal
             m_MainLightShadowMatrices = new Matrix4x4[k_MaxCascades + 1];
             m_CascadeSlices = new ShadowSliceData[k_MaxCascades];
             m_CascadeSplitDistances = new Vector4[k_MaxCascades];
+            m_CascadeSplitSphereRadii = new Vector4[k_MaxCascades / 4];
 
             m_EmptyShadowmapNeedsClear = true;
         }
@@ -265,6 +264,9 @@ namespace UnityEngine.Rendering.Universal.Internal
             for (int i = 0; i < m_CascadeSplitDistances.Length; ++i)
                 m_CascadeSplitDistances[i] = new Vector4(0.0f, 0.0f, 0.0f, 0.0f);
 
+            for (int i = 0; i < m_CascadeSplitSphereRadii.Length; ++i)
+                m_CascadeSplitSphereRadii[i] = Vector4.zero;
+
             for (int i = 0; i < m_CascadeSlices.Length; ++i)
                 m_CascadeSlices[i].Clear();
         }
@@ -350,19 +352,20 @@ namespace UnityEngine.Rendering.Universal.Internal
 
             if (m_ShadowCasterCascadesCount > 1)
             {
-                cmd.SetGlobalVector(MainLightShadowConstantBuffer._CascadeShadowSplitSpheres0,
-                    m_CascadeSplitDistances[0]);
-                cmd.SetGlobalVector(MainLightShadowConstantBuffer._CascadeShadowSplitSpheres1,
-                    m_CascadeSplitDistances[1]);
-                cmd.SetGlobalVector(MainLightShadowConstantBuffer._CascadeShadowSplitSpheres2,
-                    m_CascadeSplitDistances[2]);
-                cmd.SetGlobalVector(MainLightShadowConstantBuffer._CascadeShadowSplitSpheres3,
-                    m_CascadeSplitDistances[3]);
-                cmd.SetGlobalVector(MainLightShadowConstantBuffer._CascadeShadowSplitSphereRadii, new Vector4(
-                    m_CascadeSplitDistances[0].w * m_CascadeSplitDistances[0].w,
-                    m_CascadeSplitDistances[1].w * m_CascadeSplitDistances[1].w,
-                    m_CascadeSplitDistances[2].w * m_CascadeSplitDistances[2].w,
-                    m_CascadeSplitDistances[3].w * m_CascadeSplitDistances[3].w));
+                Vector4 lastCascadeSphere = m_CascadeSplitDistances[m_ShadowCasterCascadesCount - 1];
+                for (int i = m_ShadowCasterCascadesCount; i < k_MaxCascades; ++i)
+                    m_CascadeSplitDistances[i] = lastCascadeSphere;
+
+                for (int i = 0; i < k_MaxCascades; ++i)
+                {
+                    int radiusGroup = i / 4;
+                    Vector4 radii = m_CascadeSplitSphereRadii[radiusGroup];
+                    radii[i % 4] = m_CascadeSplitDistances[i].w * m_CascadeSplitDistances[i].w;
+                    m_CascadeSplitSphereRadii[radiusGroup] = radii;
+                }
+
+                cmd.SetGlobalVectorArray(MainLightShadowConstantBuffer._CascadeShadowSplitSpheres, m_CascadeSplitDistances);
+                cmd.SetGlobalVectorArray(MainLightShadowConstantBuffer._CascadeShadowSplitSphereRadii, m_CascadeSplitSphereRadii);
             }
 
             // Inside shader soft shadows are controlled through global keyword.
@@ -423,8 +426,12 @@ namespace UnityEngine.Rendering.Universal.Internal
             {
                 var settings = new ShadowDrawingSettings(passData.renderingData.cullResults, shadowLightIndex);
                 settings.useRenderingLayerMaskTest = UniversalRenderPipeline.asset.useRenderingLayers;
+                bool useNativeShadowCasterCulling = ShadowCulling.UsesNativeShadowCasterCulling(passData.shadowData);
                 for (int cascadeIndex = 0; cascadeIndex < m_ShadowCasterCascadesCount; ++cascadeIndex)
                 {
+                    if (!useNativeShadowCasterCulling)
+                        settings.splitData = m_CascadeSlices[cascadeIndex].splitData;
+
                     if (useRenderGraph)
                         passData.shadowRendererListsHandle[cascadeIndex] = renderGraph.CreateShadowRendererList(ref settings);
                     else
