@@ -78,12 +78,12 @@ RW_TEXTURE2D(float, _BilateralTexture);
 #define SCREENSPACE_SHADOWS_THREADS     (64)
 
 
-#define HIGH_PREFILTER_SAMPLE_COUNT     (32)
-#define HIGH_BLOCKER_SAMPLE_COUNT       (16)
-#define HIGH_PCSS_SAMPLE_COUNT          (32)
-#define ULTRA_PREFILTER_SAMPLE_COUNT    (48)
-#define ULTRA_BLOCKER_SAMPLE_COUNT      (32)
-#define ULTRA_PCSS_SAMPLE_COUNT         (64)
+#define HIGH_PREFILTER_SAMPLE_COUNT     (9)
+#define HIGH_BLOCKER_SAMPLE_COUNT       (12)
+#define HIGH_PCSS_SAMPLE_COUNT          (24)
+#define ULTRA_PREFILTER_SAMPLE_COUNT    (12)
+#define ULTRA_BLOCKER_SAMPLE_COUNT      (16)
+#define ULTRA_PCSS_SAMPLE_COUNT         (32)
 
 // World space filter size.
 #define FILTER_SIZE_PREFILTER           (0.3)
@@ -94,6 +94,7 @@ RW_TEXTURE2D(float, _BilateralTexture);
 
 int _CamHistoryFrameCount;
 int _RasterShadowDenoiser;
+int _CascadeShadowDebugMode;
 float4 _ContactShadowParams0;
 float4 _ContactShadowParams1;
 int _ContactShadowSampleCount;
@@ -121,15 +122,22 @@ void InitializeDispatchThreadIdFromTileList(uint groupId, uint2 gThreadId, out u
 
 #if defined(SHADOW_CLASSIFY_TILES) || defined(SHADOW_PCSS)
 
-float2 GetShadowNoise(uint2 coordSS, float3 shadowCoord, uint cascadeIndex)
+float2 GetShadowNoise(uint2 coordSS)
 {
-    uint2 shadowmapSize = (uint2)_MainLightShadowmapSize.zw;
-    uint2 stableNoiseCoord = (uint2)floor(saturate(shadowCoord.xy) * shadowmapSize * 4.0);
-    stableNoiseCoord += uint2(cascadeIndex * 17, cascadeIndex * 31);
-
-    uint2 noiseCoord = _RasterShadowDenoiser != 0 ? coordSS : stableNoiseCoord;
-    float2 noiseVector = GetSpatiotemporalBlueNoiseVec2(noiseCoord) * 2.0 - 1.0;
+    // High binds STBN frame zero, so this is static without quantizing rotation
+    // into visible shadow-map texel cells. Ultra advances the frame and denoises it.
+    float2 noiseVector = GetSpatiotemporalBlueNoiseVec2(coordSS) * 2.0 - 1.0;
     return noiseVector * rsqrt(max(dot(noiseVector, noiseVector), 1e-4));
+}
+
+half SmoothCascadeBlend(half cascadeBlend)
+{
+    return cascadeBlend * cascadeBlend * (half(3.0) - half(2.0) * cascadeBlend);
+}
+
+float GetCascadeIndexDebugValue(half cascadeIndex)
+{
+    return (cascadeIndex + half(0.5)) / max(_MainLightShadowCascadeParams.x, 1.0);
 }
 
 float SampleHardDirectionalShadow(float3 shadowCoord, uint cascadeIndex)
@@ -141,18 +149,42 @@ float SampleHardDirectionalShadow(float3 shadowCoord, uint cascadeIndex)
 
 float SamplePCFDirectionalShadow(float3 shadowCoord, uint cascadeIndex, half shadowQuality)
 {
-    // Low and Medium share the same cascade transform and receiver bias as Hard and PCSS.
-    ShadowSamplingData samplingData = (ShadowSamplingData)0;
-    samplingData.shadowOffset0 = _MainLightShadowOffset0;
-    samplingData.shadowOffset1 = _MainLightShadowOffset1;
-    samplingData.shadowmapSize = _MainLightShadowmapSize;
-    samplingData.softShadowQuality = shadowQuality;
     float4 biasedShadowCoord = float4(ApplyMainLightReceiverBias(shadowCoord, cascadeIndex), cascadeIndex);
-    float attenuation = 1.0;
+    float referenceTexelSizeWS = max(_PerCascadePCSSData[0].y, FLT_MIN);
+    float cascadeTexelSizeWS = max(_PerCascadePCSSData[cascadeIndex].y, FLT_MIN);
+    float kernelScale = min(referenceTexelSizeWS / cascadeTexelSizeWS, 1.0);
+
     if (shadowQuality == SOFT_SHADOW_QUALITY_LOW)
-        attenuation = SampleShadowmapArrayFilteredLowQuality(TEXTURE2D_ARRAY_SHADOW_ARGS(_DirShadowmapTexture, sampler_LinearClampCompare), biasedShadowCoord, samplingData);
-    else
-        attenuation = SampleShadowmapArrayFilteredMediumQuality(TEXTURE2D_ARRAY_SHADOW_ARGS(_DirShadowmapTexture, sampler_LinearClampCompare), biasedShadowCoord, samplingData);
+    {
+        float4 attenuation;
+        float4 offset0 = _MainLightShadowOffset0 * kernelScale;
+        float4 offset1 = _MainLightShadowOffset1 * kernelScale;
+        attenuation.x = SAMPLE_TEXTURE2D_ARRAY_SHADOW(_DirShadowmapTexture, sampler_LinearClampCompare,
+            biasedShadowCoord.xyz + float3(offset0.xy, 0.0), biasedShadowCoord.w);
+        attenuation.y = SAMPLE_TEXTURE2D_ARRAY_SHADOW(_DirShadowmapTexture, sampler_LinearClampCompare,
+            biasedShadowCoord.xyz + float3(offset0.zw, 0.0), biasedShadowCoord.w);
+        attenuation.z = SAMPLE_TEXTURE2D_ARRAY_SHADOW(_DirShadowmapTexture, sampler_LinearClampCompare,
+            biasedShadowCoord.xyz + float3(offset1.xy, 0.0), biasedShadowCoord.w);
+        attenuation.w = SAMPLE_TEXTURE2D_ARRAY_SHADOW(_DirShadowmapTexture, sampler_LinearClampCompare,
+            biasedShadowCoord.xyz + float3(offset1.zw, 0.0), biasedShadowCoord.w);
+        return dot(attenuation, 0.25);
+    }
+
+    float fetchesWeights[9];
+    float2 fetchesUV[9];
+    ZERO_INITIALIZE_ARRAY(float, fetchesWeights, 9);
+    ZERO_INITIALIZE_ARRAY(float2, fetchesUV, 9);
+    SampleShadow_ComputeSamples_Tent_5x5(_MainLightShadowmapSize, biasedShadowCoord.xy, fetchesWeights, fetchesUV);
+
+    float attenuation = 0.0;
+    UNITY_UNROLL
+    for (int sampleIndex = 0; sampleIndex < 9; ++sampleIndex)
+    {
+        float2 sampleUV = biasedShadowCoord.xy + (fetchesUV[sampleIndex] - biasedShadowCoord.xy) * kernelScale;
+        attenuation += fetchesWeights[sampleIndex] * SAMPLE_TEXTURE2D_ARRAY_SHADOW(
+            _DirShadowmapTexture, sampler_LinearClampCompare,
+            float3(sampleUV, biasedShadowCoord.z), biasedShadowCoord.w);
+    }
 
     return attenuation;
 }
@@ -296,6 +328,7 @@ void CLASSIFY_TILES(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupInde
         half cascadeIndex;
         half cascadeBlend;
         ComputeCascadeIndexAndBlend(positionWS, cascadeIndex, cascadeBlend);
+        cascadeBlend = SmoothCascadeBlend(cascadeBlend);
         if (cascadeIndex >= MAX_SHADOW_CASCADES)
         {
             _SSDirShadowmapTexture[coordSS] = 1.0;
@@ -305,6 +338,18 @@ void CLASSIFY_TILES(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupInde
         float4 shadowCoord = TransformWorldToShadowCoord(positionWS, cascadeIndex);
         float shadowFade = GetMainLightShadowFade(positionWS);
 
+        if (_CascadeShadowDebugMode == 1)
+        {
+            _SSDirShadowmapTexture[coordSS] = GetCascadeIndexDebugValue(cascadeIndex);
+            continue;
+        }
+
+        if (_CascadeShadowDebugMode == 2)
+        {
+            _SSDirShadowmapTexture[coordSS] = cascadeBlend;
+            continue;
+        }
+
         half shadowQuality = _MainLightShadowParams.y;
         if (shadowQuality < SOFT_SHADOW_QUALITY_HIGH)
         {
@@ -312,15 +357,23 @@ void CLASSIFY_TILES(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupInde
             float shadow = hardShadows
                 ? SampleHardDirectionalShadow(shadowCoord.xyz, cascadeIndex)
                 : SamplePCFDirectionalShadow(shadowCoord.xyz, cascadeIndex, shadowQuality);
+            float nextShadow = shadow;
             if (cascadeBlend > 0.0)
             {
                 half nextCascadeIndex = cascadeIndex + half(1.0);
                 float4 nextShadowCoord = TransformWorldToShadowCoord(positionWS, nextCascadeIndex);
-                float nextShadow = hardShadows
+                nextShadow = hardShadows
                     ? SampleHardDirectionalShadow(nextShadowCoord.xyz, nextCascadeIndex)
                     : SamplePCFDirectionalShadow(nextShadowCoord.xyz, nextCascadeIndex, shadowQuality);
-                shadow = lerp(shadow, nextShadow, cascadeBlend);
             }
+
+            if (_CascadeShadowDebugMode == 3)
+            {
+                _SSDirShadowmapTexture[coordSS] = abs(shadow - nextShadow);
+                continue;
+            }
+
+            shadow = lerp(shadow, nextShadow, cascadeBlend);
 
             _SSDirShadowmapTexture[coordSS] = lerp(shadow, 1.0, shadowFade);
             continue;
@@ -331,19 +384,27 @@ void CLASSIFY_TILES(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupInde
         float filterSampleCount;
         GetPCSSSampleCounts(prefilterSampleCount, blockerSampleCount, filterSampleCount);
 
-        float2 noiseJitter = GetShadowNoise(coordSS, shadowCoord.xyz, cascadeIndex);
+        float2 noiseJitter = GetShadowNoise(coordSS);
         bool currentNeedsPCSS;
         float shadow = ClassifyPCSSShadow(shadowCoord.xyz, cascadeIndex, noiseJitter, prefilterSampleCount, currentNeedsPCSS);
         bool nextNeedsPCSS = false;
+        float nextShadow = shadow;
         if (cascadeBlend > 0.0)
         {
             half nextCascadeIndex = cascadeIndex + half(1.0);
             float4 nextShadowCoord = TransformWorldToShadowCoord(positionWS, nextCascadeIndex);
             // Keep the sampling rotation continuous while blending adjacent cascades.
             float2 nextNoiseJitter = noiseJitter;
-            float nextShadow = ClassifyPCSSShadow(nextShadowCoord.xyz, nextCascadeIndex, nextNoiseJitter, prefilterSampleCount, nextNeedsPCSS);
-            shadow = lerp(shadow, nextShadow, cascadeBlend);
+            nextShadow = ClassifyPCSSShadow(nextShadowCoord.xyz, nextCascadeIndex, nextNoiseJitter, prefilterSampleCount, nextNeedsPCSS);
         }
+
+        if (_CascadeShadowDebugMode == 3)
+        {
+            _SSDirShadowmapTexture[coordSS] = abs(shadow - nextShadow);
+            continue;
+        }
+
+        shadow = lerp(shadow, nextShadow, cascadeBlend);
 
         needIndirect = needIndirect || currentNeedsPCSS || nextNeedsPCSS;
         _SSDirShadowmapTexture[coordSS] = lerp(shadow, 1.0, shadowFade);
@@ -351,7 +412,7 @@ void CLASSIFY_TILES(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupInde
 
 #endif // RAYTRACING
 
-    needIndirect = needIndirect || (_RasterShadowDenoiser != 0);
+    needIndirect = needIndirect || (_RasterShadowDenoiser != 0 && _CascadeShadowDebugMode == 0);
 
     // Set group shared.
     if (needIndirect)
@@ -402,6 +463,7 @@ void PCSS_FILTER(uint3 dispatchThreadId : SV_DispatchThreadID, uint2 groupThread
     half cascadeIndex;
     half cascadeBlend;
     ComputeCascadeIndexAndBlend(positionWS, cascadeIndex, cascadeBlend);
+    cascadeBlend = SmoothCascadeBlend(cascadeBlend);
     if (cascadeIndex >= MAX_SHADOW_CASCADES)
     {
         _PCSSTexture[coordSS] = 1.0;
@@ -414,7 +476,7 @@ void PCSS_FILTER(uint3 dispatchThreadId : SV_DispatchThreadID, uint2 groupThread
     float filterSampleCount;
     GetPCSSSampleCounts(prefilterSampleCount, blockerSampleCount, filterSampleCount);
 
-    float2 noiseJitter = GetShadowNoise(coordSS, shadowCoord.xyz, cascadeIndex);
+    float2 noiseJitter = GetShadowNoise(coordSS);
     float shadow = EvaluatePCSSShadow(shadowCoord.xyz, cascadeIndex, noiseJitter, blockerSampleCount, filterSampleCount);
     if (cascadeBlend > 0.0)
     {

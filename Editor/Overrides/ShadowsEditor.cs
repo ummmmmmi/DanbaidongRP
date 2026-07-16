@@ -18,6 +18,7 @@ namespace UnityEditor.Rendering.Universal
         SerializedDataParameter m_Intensity;
 
         SerializedDataParameter m_PerObjectShadowPenumbra;
+        SerializedDataParameter m_CascadeDebugMode;
 
         SerializedDataParameter m_ContactShadows;
         SerializedDataParameter m_ContactShadowLength;
@@ -56,6 +57,7 @@ namespace UnityEditor.Rendering.Universal
 
             m_Penumbra = Unpack(o.Find(x => x.penumbra));
             m_PerObjectShadowPenumbra = Unpack(o.Find(x => x.perObjectShadowPenumbra));
+            m_CascadeDebugMode = Unpack(o.Find(x => x.cascadeDebugMode));
 
             m_ContactShadows = Unpack(o.Find(x => x.contactShadows));
             m_ContactShadowLength = Unpack(o.Find(x => x.contactShadowLength));
@@ -136,6 +138,7 @@ namespace UnityEditor.Rendering.Universal
 
             PropertyField(m_Penumbra);
             PropertyField(m_PerObjectShadowPenumbra, s_PerObjectShadowPenumbra);
+            PropertyField(m_CascadeDebugMode);
 
             EditorGUILayout.Space(10);
             PropertyField(m_ContactShadows);

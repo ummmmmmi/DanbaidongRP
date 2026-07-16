@@ -9,6 +9,29 @@ namespace UnityEngine.Rendering.Universal
         SubSurface = 2,
     }
 
+    public enum ScreenSpaceShadowCascadeDebugMode
+    {
+        None = 0,
+        CascadeIndex = 1,
+        BlendWeight = 2,
+        CascadeDifference = 3,
+    }
+
+    /// <summary>
+    /// 屏幕空间阴影级联调试模式参数。
+    /// </summary>
+    [Serializable]
+    public sealed class ScreenSpaceShadowCascadeDebugModeParameter : VolumeParameter<ScreenSpaceShadowCascadeDebugMode>
+    {
+        /// <summary>
+        /// 创建屏幕空间阴影级联调试模式参数。
+        /// </summary>
+        public ScreenSpaceShadowCascadeDebugModeParameter(ScreenSpaceShadowCascadeDebugMode value, bool overrideState = false)
+            : base(value, overrideState)
+        {
+        }
+    }
+
     [Serializable]
     public sealed class ShadowScatterModeParameter : VolumeParameter<ShadowScatterMode>
     {
@@ -60,6 +83,10 @@ namespace UnityEngine.Rendering.Universal
 
         [Tooltip("Penumbra controls shadows soften width. (For Per Object Shadow)")]
         public ClampedFloatParameter perObjectShadowPenumbra = new ClampedFloatParameter(1.0f, 0.001f, 3.0f);
+
+        [Tooltip("Debugs screen-space shadow cascade index, blend weight, or adjacent-cascade difference.")]
+        public ScreenSpaceShadowCascadeDebugModeParameter cascadeDebugMode =
+            new ScreenSpaceShadowCascadeDebugModeParameter(ScreenSpaceShadowCascadeDebugMode.None);
 
         [Tooltip("Adds short-range screen-space contact shadows to raster directional shadows.")]
         public BoolParameter contactShadows = new BoolParameter(false);

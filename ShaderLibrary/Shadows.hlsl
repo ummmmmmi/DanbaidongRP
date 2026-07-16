@@ -487,8 +487,15 @@ void ComputeCascadeIndexAndBlend(float3 positionWS, out half cascadeIndex, out h
                 float nextRadius2 = GetCascadeRadiusSquared(i + 1);
                 float innerRadiusScale = 1.0 - saturate(_MainLightShadowCascadeParams.y);
                 float innerRadius2 = radius2 * innerRadiusScale * innerRadiusScale;
-                cascadeBlend = half(saturate((distance2 - innerRadius2) / max(radius2 - innerRadius2, FLT_MIN)));
-                cascadeBlend *= half(nextDistance2 < nextRadius2);
+                float currentFade = saturate((distance2 - innerRadius2) / max(radius2 - innerRadius2, FLT_MIN));
+
+                float nextInnerRadius2 = nextRadius2 * innerRadiusScale * innerRadiusScale;
+                float nextCoverage = 1.0 - saturate(
+                    (nextDistance2 - nextInnerRadius2) / max(nextRadius2 - nextInnerRadius2, FLT_MIN));
+                nextCoverage = nextCoverage * nextCoverage * (3.0 - 2.0 * nextCoverage);
+
+                float nextWeight = currentFade * nextCoverage;
+                cascadeBlend = half(nextWeight / max(nextWeight + 1.0 - currentFade, FLT_MIN));
             }
 
             break;

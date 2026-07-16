@@ -224,6 +224,7 @@ namespace UnityEngine.Rendering.Universal
             internal TextureHandle prevShadowMetadataTex;
 
             internal int camHistoryFrameCount;
+            internal int cascadeDebugMode;
             internal TextureHandle blueNoiseArray;
 
             // Ray Tracing
@@ -276,6 +277,10 @@ namespace UnityEngine.Rendering.Universal
             passData.contactShadowsKernel = m_ContactShadowsKernel;
 
             passData.camHistoryFrameCount = historyFramCount;
+            Shadows shadowSettings = VolumeManager.instance.stack.GetComponent<Shadows>();
+            passData.cascadeDebugMode = shadowSettings != null && shadowSettings.active
+                ? (int)shadowSettings.cascadeDebugMode.value
+                : 0;
             passData.blueNoiseArray = resourceData.blueNoise128RG;
 
             var width = cameraData.cameraTargetDescriptor.width;
@@ -653,6 +658,7 @@ namespace UnityEngine.Rendering.Universal
 
             cmd.SetComputeFloatParam(data.cs, ShaderConstants._CamHistoryFrameCount, data.camHistoryFrameCount);
             cmd.SetComputeIntParam(data.cs, ShaderConstants._RasterShadowDenoiser, data.enableRasterDenoiser ? 1 : 0);
+            cmd.SetComputeIntParam(data.cs, ShaderConstants._CascadeShadowDebugMode, data.cascadeDebugMode);
 
             // BuildIndirect
             using (new ProfilingScope(cmd, m_SSDSClassifyTilesProfilingSampler))
@@ -670,6 +676,9 @@ namespace UnityEngine.Rendering.Universal
 
                 cmd.DispatchCompute(data.cs, data.classifyTilesKernel, data.numTilesX, data.numTilesY, 1);
             }
+
+            if (data.cascadeDebugMode != 0)
+                return;
 
             // PCSS ScreenSpaceShadowmap
             using (new ProfilingScope(cmd, m_SSDS_PCSS_ProfilingSampler))
@@ -801,6 +810,7 @@ namespace UnityEngine.Rendering.Universal
             public static readonly int _BilateralTexture = Shader.PropertyToID("_BilateralTexture");
             public static readonly int _CamHistoryFrameCount = Shader.PropertyToID("_CamHistoryFrameCount");
             public static readonly int _RasterShadowDenoiser = Shader.PropertyToID("_RasterShadowDenoiser");
+            public static readonly int _CascadeShadowDebugMode = Shader.PropertyToID("_CascadeShadowDebugMode");
 
             public static readonly int _RayTracingShadowsTextureRW = Shader.PropertyToID("_RayTracingShadowsTextureRW");
             public static readonly int _StencilTexture = Shader.PropertyToID("_StencilTexture");
