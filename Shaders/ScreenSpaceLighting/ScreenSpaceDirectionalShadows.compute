@@ -5,6 +5,7 @@
 #pragma kernel ShadowClassifyTiles              SHADOW_CLASSIFY_TILES       CLASSIFY_TILES=ShadowClassifyTiles
 #pragma kernel RayTracingShadowClassifyTiles    SHADOW_CLASSIFY_TILES       CLASSIFY_TILES=RayTracingShadowClassifyTiles    RAYTRACING
 #pragma kernel ScreenSpaceShadowmap             SHADOW_PCSS                 PCSS_FILTER=ScreenSpaceShadowmap
+#pragma kernel ContactShadows                   CONTACT_SHADOWS
 #pragma kernel BilateralFilterH                 SHADOW_BILATERAL_FILTER     BILATERAL_FILTER=BilateralFilterH
 #pragma kernel BilateralFilterV                 SHADOW_BILATERAL_FILTER     BILATERAL_FILTER=BilateralFilterV               FINAL_PASS
 
@@ -55,6 +56,11 @@ TEXTURE2D_ARRAY(_DirShadowmapTexture);
 
 RW_TEXTURE2D(float, _PCSSTexture);
 
+#elif defined(CONTACT_SHADOWS)
+TEXTURE2D_X(_GBuffer0);
+TEXTURE2D_X(_GBuffer2);
+RW_TEXTURE2D(float, _SSDirShadowmapTexture);
+
 
 #elif defined(SHADOW_BILATERAL_FILTER)
 TEXTURE2D_X_FLOAT(_GBuffer2);
@@ -72,9 +78,12 @@ RW_TEXTURE2D(float, _BilateralTexture);
 #define SCREENSPACE_SHADOWS_THREADS     (64)
 
 
-#define PREFILTER_SAMPLE_COUNT          (32)
-#define BLOCKER_SAMPLE_COUNT            (16)
-#define PCSS_SAMPLE_COUNT               (32)
+#define HIGH_PREFILTER_SAMPLE_COUNT     (32)
+#define HIGH_BLOCKER_SAMPLE_COUNT       (16)
+#define HIGH_PCSS_SAMPLE_COUNT          (32)
+#define ULTRA_PREFILTER_SAMPLE_COUNT    (48)
+#define ULTRA_BLOCKER_SAMPLE_COUNT      (32)
+#define ULTRA_PCSS_SAMPLE_COUNT         (64)
 
 // World space filter size.
 #define FILTER_SIZE_PREFILTER           (0.3)
@@ -84,6 +93,10 @@ RW_TEXTURE2D(float, _BilateralTexture);
 
 
 int _CamHistoryFrameCount;
+int _RasterShadowDenoiser;
+float4 _ContactShadowParams0;
+float4 _ContactShadowParams1;
+int _ContactShadowSampleCount;
 
 
 uint2 DecodeTileIndex(uint encoded)
@@ -108,6 +121,75 @@ void InitializeDispatchThreadIdFromTileList(uint groupId, uint2 gThreadId, out u
 
 #if defined(SHADOW_CLASSIFY_TILES) || defined(SHADOW_PCSS)
 
+float2 GetShadowNoise(uint2 coordSS, float3 shadowCoord, uint cascadeIndex)
+{
+    uint2 shadowmapSize = (uint2)_MainLightShadowmapSize.zw;
+    uint2 stableNoiseCoord = (uint2)floor(saturate(shadowCoord.xy) * shadowmapSize * 4.0);
+    stableNoiseCoord += uint2(cascadeIndex * 17, cascadeIndex * 31);
+
+    uint2 noiseCoord = _RasterShadowDenoiser != 0 ? coordSS : stableNoiseCoord;
+    float2 noiseVector = GetSpatiotemporalBlueNoiseVec2(noiseCoord) * 2.0 - 1.0;
+    return noiseVector * rsqrt(max(dot(noiseVector, noiseVector), 1e-4));
+}
+
+float SampleHardDirectionalShadow(float3 shadowCoord, uint cascadeIndex)
+{
+    shadowCoord = ApplyMainLightReceiverBias(shadowCoord, cascadeIndex);
+    float shadowMapDepth = SAMPLE_TEXTURE2D_ARRAY_LOD(_DirShadowmapTexture, sampler_PointClamp, shadowCoord.xy, cascadeIndex, 0).x;
+    return COMPARE_DEVICE_DEPTH_CLOSER(shadowMapDepth, shadowCoord.z) ? 0.0 : 1.0;
+}
+
+float SamplePCFDirectionalShadow(float3 shadowCoord, uint cascadeIndex, half shadowQuality)
+{
+    // Low and Medium share the same cascade transform and receiver bias as Hard and PCSS.
+    ShadowSamplingData samplingData = (ShadowSamplingData)0;
+    samplingData.shadowOffset0 = _MainLightShadowOffset0;
+    samplingData.shadowOffset1 = _MainLightShadowOffset1;
+    samplingData.shadowmapSize = _MainLightShadowmapSize;
+    samplingData.softShadowQuality = shadowQuality;
+    float4 biasedShadowCoord = float4(ApplyMainLightReceiverBias(shadowCoord, cascadeIndex), cascadeIndex);
+    float attenuation = 1.0;
+    if (shadowQuality == SOFT_SHADOW_QUALITY_LOW)
+        attenuation = SampleShadowmapArrayFilteredLowQuality(TEXTURE2D_ARRAY_SHADOW_ARGS(_DirShadowmapTexture, sampler_LinearClampCompare), biasedShadowCoord, samplingData);
+    else
+        attenuation = SampleShadowmapArrayFilteredMediumQuality(TEXTURE2D_ARRAY_SHADOW_ARGS(_DirShadowmapTexture, sampler_LinearClampCompare), biasedShadowCoord, samplingData);
+
+    return attenuation;
+}
+
+void GetPCSSSampleCounts(out float prefilterSampleCount, out float blockerSampleCount, out float filterSampleCount)
+{
+    bool ultraQuality = _MainLightShadowParams.y >= SOFT_SHADOW_QUALITY_ULTRA;
+    prefilterSampleCount = ultraQuality ? ULTRA_PREFILTER_SAMPLE_COUNT : HIGH_PREFILTER_SAMPLE_COUNT;
+    blockerSampleCount = ultraQuality ? ULTRA_BLOCKER_SAMPLE_COUNT : HIGH_BLOCKER_SAMPLE_COUNT;
+    filterSampleCount = ultraQuality ? ULTRA_PCSS_SAMPLE_COUNT : HIGH_PCSS_SAMPLE_COUNT;
+}
+
+float ClassifyPCSSShadow(float3 shadowCoord, uint cascadeIndex, float2 noiseJitter, float prefilterSampleCount, out bool needsPCSS)
+{
+    float texelSizeWS = _PerCascadePCSSData[cascadeIndex].y;
+    float preFilterSize = max(FILTER_SIZE_PREFILTER / texelSizeWS, 1.0);
+    float blockerCount = PreFilterSearch(prefilterSampleCount, preFilterSize, shadowCoord, cascadeIndex, noiseJitter);
+    needsPCSS = blockerCount > 0.0 && blockerCount < prefilterSampleCount;
+    return 1.0 - saturate(blockerCount / prefilterSampleCount);
+}
+
+float EvaluatePCSSShadow(float3 shadowCoord, uint cascadeIndex, float2 noiseJitter, float blockerSampleCount, float filterSampleCount)
+{
+    float texelSizeWS = _PerCascadePCSSData[cascadeIndex].y;
+    float farToNear = _PerCascadePCSSData[cascadeIndex].z;
+
+    float filterSize = max(FILTER_SIZE_BLOCKER / texelSizeWS, 1.0);
+    float2 avgDepthAndCount = BlockerSearch(blockerSampleCount, filterSize, shadowCoord, noiseJitter, cascadeIndex);
+    if (avgDepthAndCount.y == 0.0)
+        return 1.0;
+
+    float receiverDepth = ApplyMainLightReceiverBias(shadowCoord, cascadeIndex).z;
+    float blockerDistance = min(abs(avgDepthAndCount.x - receiverDepth) * farToNear, 10.0);
+    float maxPCSSoffset = blockerDistance / farToNear * 0.25;
+    float pcssFilterSize = max(DIR_LIGHT_PENUMBRA_WIDTH * blockerDistance * 0.01 / texelSizeWS, 0.01);
+    return PCSSFilter(filterSampleCount, pcssFilterSize, shadowCoord, noiseJitter, cascadeIndex, maxPCSSoffset);
+}
 
 #elif defined(SHADOW_BILATERAL_FILTER)
 
@@ -211,52 +293,65 @@ void CLASSIFY_TILES(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupInde
         // Position
         PositionInputs posInput = GetPositionInput(coordSS.xy, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V, uint2(0, 0));
         float3 positionWS = posInput.positionWS;
-        float4 shadowCoord = TransformWorldToShadowCoord(positionWS);
-        float cascadeIndex = shadowCoord.w;
+        half cascadeIndex;
+        half cascadeBlend;
+        ComputeCascadeIndexAndBlend(positionWS, cascadeIndex, cascadeBlend);
         if (cascadeIndex >= MAX_SHADOW_CASCADES)
         {
             _SSDirShadowmapTexture[coordSS] = 1.0;
             continue;
         }
 
-        bool isNotDistFar = GetMainLightShadowFade(positionWS) < 1;
+        float4 shadowCoord = TransformWorldToShadowCoord(positionWS, cascadeIndex);
+        float shadowFade = GetMainLightShadowFade(positionWS);
 
-        if (_MainLightShadowParams.y <= 0.0)
+        half shadowQuality = _MainLightShadowParams.y;
+        if (shadowQuality < SOFT_SHADOW_QUALITY_HIGH)
         {
-            float shadowMapDepth = SAMPLE_TEXTURE2D_ARRAY_LOD(_DirShadowmapTexture, sampler_PointClamp, shadowCoord.xy, cascadeIndex, 0).x;
-            bool isBlocked = COMPARE_DEVICE_DEPTH_CLOSER(shadowMapDepth, shadowCoord.z);
-            _SSDirShadowmapTexture[coordSS] = (isBlocked && isNotDistFar) ? 0.0 : 1.0;
+            bool hardShadows = shadowQuality <= SOFT_SHADOW_QUALITY_OFF;
+            float shadow = hardShadows
+                ? SampleHardDirectionalShadow(shadowCoord.xyz, cascadeIndex)
+                : SamplePCFDirectionalShadow(shadowCoord.xyz, cascadeIndex, shadowQuality);
+            if (cascadeBlend > 0.0)
+            {
+                half nextCascadeIndex = cascadeIndex + half(1.0);
+                float4 nextShadowCoord = TransformWorldToShadowCoord(positionWS, nextCascadeIndex);
+                float nextShadow = hardShadows
+                    ? SampleHardDirectionalShadow(nextShadowCoord.xyz, nextCascadeIndex)
+                    : SamplePCFDirectionalShadow(nextShadowCoord.xyz, nextCascadeIndex, shadowQuality);
+                shadow = lerp(shadow, nextShadow, cascadeBlend);
+            }
+
+            _SSDirShadowmapTexture[coordSS] = lerp(shadow, 1.0, shadowFade);
             continue;
         }
 
-        float radial2ShadowmapDepth = _PerCascadePCSSData[cascadeIndex].x;
-        float texelSizeWS           = _PerCascadePCSSData[cascadeIndex].y;
-        float farToNear             = _PerCascadePCSSData[cascadeIndex].z;
-        float blockerInvTangent     = _PerCascadePCSSData[cascadeIndex].w;
+        float prefilterSampleCount;
+        float blockerSampleCount;
+        float filterSampleCount;
+        GetPCSSSampleCounts(prefilterSampleCount, blockerSampleCount, filterSampleCount);
 
-        // Sample Noise: Use Jitter instead.
-        float2 noiseJitter = 0;
-        noiseJitter.xy = InterleavedGradientNoise(coordSS.xy, _CamHistoryFrameCount);
-        noiseJitter *= TWO_PI;
-        noiseJitter.x = sin(noiseJitter.x);
-        noiseJitter.y = cos(noiseJitter.y);
+        float2 noiseJitter = GetShadowNoise(coordSS, shadowCoord.xyz, cascadeIndex);
+        bool currentNeedsPCSS;
+        float shadow = ClassifyPCSSShadow(shadowCoord.xyz, cascadeIndex, noiseJitter, prefilterSampleCount, currentNeedsPCSS);
+        bool nextNeedsPCSS = false;
+        if (cascadeBlend > 0.0)
+        {
+            half nextCascadeIndex = cascadeIndex + half(1.0);
+            float4 nextShadowCoord = TransformWorldToShadowCoord(positionWS, nextCascadeIndex);
+            // Keep the sampling rotation continuous while blending adjacent cascades.
+            float2 nextNoiseJitter = noiseJitter;
+            float nextShadow = ClassifyPCSSShadow(nextShadowCoord.xyz, nextCascadeIndex, nextNoiseJitter, prefilterSampleCount, nextNeedsPCSS);
+            shadow = lerp(shadow, nextShadow, cascadeBlend);
+        }
 
-        // PreFilter Search
-        float preFilterSize = FILTER_SIZE_PREFILTER / texelSizeWS; // texel count
-        preFilterSize = max(preFilterSize, 1.0);
-        float preFilterRet = PreFilterSearch(PREFILTER_SAMPLE_COUNT, preFilterSize, shadowCoord.xyz, cascadeIndex, noiseJitter);
-        bool isOcclusion = preFilterRet > 0 && isNotDistFar;
-        if (isOcclusion && preFilterRet < PREFILTER_SAMPLE_COUNT)
-        {
-            needIndirect = true;
-        }
-        if (isOcclusion)
-        {
-            _SSDirShadowmapTexture[coordSS] = (preFilterRet == PREFILTER_SAMPLE_COUNT) ? 0.0 : 0.5;
-        }
+        needIndirect = needIndirect || currentNeedsPCSS || nextNeedsPCSS;
+        _SSDirShadowmapTexture[coordSS] = lerp(shadow, 1.0, shadowFade);
     }
 
 #endif // RAYTRACING
+
+    needIndirect = needIndirect || (_RasterShadowDenoiser != 0);
 
     // Set group shared.
     if (needIndirect)
@@ -293,6 +388,7 @@ void PCSS_FILTER(uint3 dispatchThreadId : SV_DispatchThreadID, uint2 groupThread
     uint2 coordSS;
     uint2 tileCoord;
     InitializeDispatchThreadIdFromTileList(groupId, groupThreadId, tileCoord, coordSS);
+    coordSS = min(coordSS, (uint2)_ScreenSize.xy - 1);
 
     if (_PCSSTexture[coordSS] == 0.0 || _PCSSTexture[coordSS] == 1.0)
         return;
@@ -303,54 +399,115 @@ void PCSS_FILTER(uint3 dispatchThreadId : SV_DispatchThreadID, uint2 groupThread
     // Position
     PositionInputs posInput = GetPositionInput(coordSS.xy, _ScreenSize.zw, depth, UNITY_MATRIX_I_VP, UNITY_MATRIX_V, uint2(0, 0));
     float3 positionWS = posInput.positionWS;
-    float4 shadowCoord = TransformWorldToShadowCoord(positionWS);
-    float cascadeIndex = shadowCoord.w;
+    half cascadeIndex;
+    half cascadeBlend;
+    ComputeCascadeIndexAndBlend(positionWS, cascadeIndex, cascadeBlend);
     if (cascadeIndex >= MAX_SHADOW_CASCADES)
     {
         _PCSSTexture[coordSS] = 1.0;
         return;
     }
 
-    float radial2ShadowmapDepth = _PerCascadePCSSData[cascadeIndex].x;
-    float texelSizeWS           = _PerCascadePCSSData[cascadeIndex].y;
-    float farToNear             = _PerCascadePCSSData[cascadeIndex].z;
-    float blockerInvTangent     = _PerCascadePCSSData[cascadeIndex].w;
+    float4 shadowCoord = TransformWorldToShadowCoord(positionWS, cascadeIndex);
+    float prefilterSampleCount;
+    float blockerSampleCount;
+    float filterSampleCount;
+    GetPCSSSampleCounts(prefilterSampleCount, blockerSampleCount, filterSampleCount);
 
-    // Sample Noise: Use Jitter instead.
-    float2 noiseJitter = 0;
-    noiseJitter.xy = InterleavedGradientNoise(coordSS.xy, _CamHistoryFrameCount);
-    noiseJitter *= TWO_PI;
-    noiseJitter.x = sin(noiseJitter.x);
-    noiseJitter.y = cos(noiseJitter.y);
-
-
-    // Blocker Search
-    float filterSize = FILTER_SIZE_BLOCKER / texelSizeWS; // texel count
-    filterSize = max(filterSize, 1.0);
-    float2 avgDepthAndCount = BlockerSearch(BLOCKER_SAMPLE_COUNT, filterSize, shadowCoord.xyz, noiseJitter, cascadeIndex);
-    if (avgDepthAndCount.y == 0) // No Blocker
+    float2 noiseJitter = GetShadowNoise(coordSS, shadowCoord.xyz, cascadeIndex);
+    float shadow = EvaluatePCSSShadow(shadowCoord.xyz, cascadeIndex, noiseJitter, blockerSampleCount, filterSampleCount);
+    if (cascadeBlend > 0.0)
     {
-        _PCSSTexture[coordSS] = 1.0;
-        return;
+        half nextCascadeIndex = cascadeIndex + half(1.0);
+        float4 nextShadowCoord = TransformWorldToShadowCoord(positionWS, nextCascadeIndex);
+        // Match the classify pass and avoid mixing two unrelated noise phases.
+        float2 nextNoiseJitter = noiseJitter;
+        float nextShadow = EvaluatePCSSShadow(nextShadowCoord.xyz, nextCascadeIndex, nextNoiseJitter, blockerSampleCount, filterSampleCount);
+        shadow = lerp(shadow, nextShadow, cascadeBlend);
     }
 
-    // Penumbra Estimation
-    float blockerDistance = abs(avgDepthAndCount.x - shadowCoord.z);
-    blockerDistance *= farToNear;
-    blockerDistance = min(blockerDistance, 10.0);
+    _PCSSTexture[coordSS] = lerp(shadow, 1.0, GetMainLightShadowFade(positionWS));
 
-    float maxPCSSoffset = blockerDistance / farToNear * 0.25;
+}
 
-    float pcssFilterSize = DIR_LIGHT_PENUMBRA_WIDTH * blockerDistance * 0.01 / texelSizeWS;
-    pcssFilterSize = max(pcssFilterSize, 0.01);
+#elif defined(CONTACT_SHADOWS)
+//--------------------------------------------------------------------------------------------------
+// Short-range screen-space contact shadows
+//--------------------------------------------------------------------------------------------------
 
+[numthreads(8, 8, 1)]
+void ContactShadows(uint3 dispatchThreadId : SV_DispatchThreadID)
+{
+    uint2 coordSS = dispatchThreadId.xy;
+    uint2 screenSize = (uint2)_ScreenSize.xy;
+    if (any(coordSS >= screenSize))
+        return;
 
-    // PCSS Filter
-    float pcssResult = PCSSFilter(PCSS_SAMPLE_COUNT, pcssFilterSize, shadowCoord.xyz, noiseJitter, cascadeIndex, maxPCSSoffset);
-    
+    float deviceDepth = LoadSceneDepth(coordSS);
+    if (deviceDepth == UNITY_RAW_FAR_CLIP_VALUE || _SSDirShadowmapTexture[coordSS] <= 0.001)
+        return;
 
-    _PCSSTexture[coordSS] = pcssResult;
+    float4 gbuffer0 = LOAD_TEXTURE2D_X(_GBuffer0, coordSS);
+    uint materialFlags = UnpackMaterialFlags(gbuffer0.a);
+    if ((materialFlags & kMaterialFlagReceiveShadowsOff) != 0)
+        return;
 
+    float2 screenUV = TransformCoordSSToScreenUV(coordSS, _ScreenSize);
+    float3 positionWS = ComputeWorldSpacePosition(screenUV, deviceDepth, UNITY_MATRIX_I_VP);
+    float cameraDistance = distance(positionWS, _WorldSpaceCameraPos);
+    float maxDistance = _ContactShadowParams0.y;
+    float fadeDistance = max(_ContactShadowParams0.z, 1e-4);
+    float distanceFade = 1.0 - saturate((cameraDistance - (maxDistance - fadeDistance)) / fadeDistance);
+    if (distanceFade <= 0.0)
+        return;
+
+    float3 normalWS = normalize(UnpackNormal(LOAD_TEXTURE2D_X(_GBuffer2, coordSS).xyz));
+    float3 lightDirectionWS = normalize(g_DirectionalLightDatas[0].lightDirection);
+    if (dot(normalWS, lightDirectionWS) <= 0.0)
+        return;
+
+    float rayLength = _ContactShadowParams0.x;
+    float thickness = _ContactShadowParams0.w;
+    float normalBias = _ContactShadowParams1.y;
+    float jitterAmount = _ContactShadowParams1.z;
+    float rayFadeStart = _ContactShadowParams1.w;
+
+    // Screen-space blue noise turns fixed-step ray bands into high-frequency noise.
+    // High remains static because its bound STBN frame is zero; Ultra is temporally filtered.
+    float noise = GetSpatiotemporalBlueNoiseVec2(coordSS).x;
+    float sampleOffset = lerp(0.5, noise, jitterAmount);
+
+    float contactOcclusion = 0.0;
+    float3 rayOriginWS = positionWS + normalWS * normalBias;
+    UNITY_LOOP
+    for (int sampleIndex = 0; sampleIndex < _ContactShadowSampleCount; sampleIndex++)
+    {
+        float rayT = (sampleIndex + sampleOffset) / _ContactShadowSampleCount;
+        float3 rayPositionWS = rayOriginWS + lightDirectionWS * (rayT * rayLength);
+        float3 rayPositionNDC = ComputeNormalizedDeviceCoordinatesWithZ(rayPositionWS, UNITY_MATRIX_VP);
+        if (any(rayPositionNDC.xy <= 0.0) || any(rayPositionNDC.xy >= 1.0))
+            break;
+
+        uint2 sampleCoordSS = min((uint2)(rayPositionNDC.xy * screenSize), screenSize - 1);
+        float sceneDepth = LoadSceneDepth(sampleCoordSS);
+        if (sceneDepth == UNITY_RAW_FAR_CLIP_VALUE)
+            continue;
+
+        float rayEyeDepth = LinearEyeDepth(rayPositionNDC.z, _ZBufferParams);
+        float sceneEyeDepth = LinearEyeDepth(sceneDepth, _ZBufferParams);
+        float depthDelta = rayEyeDepth - sceneEyeDepth;
+        if (depthDelta <= 0.0 || depthDelta >= thickness)
+            continue;
+
+        float hitStrength = 1.0 - saturate(depthDelta / thickness);
+        float rayFade = 1.0 - saturate((rayT - rayFadeStart) / max(1.0 - rayFadeStart, 1e-4));
+        float2 edgePixels = min(rayPositionNDC.xy, 1.0 - rayPositionNDC.xy) * _ScreenSize.xy;
+        float edgeFade = saturate(min(edgePixels.x, edgePixels.y) * 0.25);
+        contactOcclusion = max(contactOcclusion, hitStrength * rayFade * edgeFade);
+    }
+
+    float contactVisibility = 1.0 - contactOcclusion * distanceFade * _ContactShadowParams1.x;
+    _SSDirShadowmapTexture[coordSS] = min(_SSDirShadowmapTexture[coordSS], contactVisibility);
 }
 
 #elif defined(SHADOW_BILATERAL_FILTER)

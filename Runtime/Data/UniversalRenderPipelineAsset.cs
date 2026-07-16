@@ -54,6 +54,10 @@ namespace UnityEngine.Rendering.Universal
         /// High quality soft shadows. Low performance due to high sample count. 7x7 tent filtering.
         /// </summary>
         High,
+        /// <summary>
+        /// Ultra quality directional shadows. Uses the highest PCSS sample count.
+        /// </summary>
+        Ultra,
     }
 
     /// <summary>

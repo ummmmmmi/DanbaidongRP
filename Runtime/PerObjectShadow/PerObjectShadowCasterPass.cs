@@ -79,19 +79,35 @@ namespace UnityEngine.Rendering.Universal
             m_volumeSettings = volumeSettings;
 
             Clear();
-            m_ValidObjectsNum = 0;
+            long visibleObjectsCount = 0;
             for (int chunkIndex = 0; chunkIndex < m_EntityManager.culledChunks.Count; chunkIndex++)
             {
-                m_ValidObjectsNum += m_EntityManager.culledChunks[chunkIndex].visibleObjectShadowCount;
+                visibleObjectsCount += m_EntityManager.culledChunks[chunkIndex].visibleObjectShadowCount;
             }
 
+            UniversalShadowData shadowData = renderingData.frameData.Get<UniversalShadowData>();
+            int maxObjectsCount = Mathf.Min(shadowData.perObjectShadowMaxObjectsCount, PerObjectShadowUtils.k_MaxObjectsNum);
+            if (visibleObjectsCount <= 0 || maxObjectsCount <= 0)
+                return false;
+
+            m_ValidObjectsNum = (int)Math.Min(visibleObjectsCount, maxObjectsCount);
+
             // Resolution calculate
-            int resolutionSetting = renderingData.frameData.Get<UniversalShadowData>().perObjectShadowShadowMapResolution;
+            int resolutionSetting = shadowData.perObjectShadowShadowMapResolution;
+            if (!Enum.IsDefined(typeof(ShadowResolution), resolutionSetting))
+            {
+                resolutionSetting = UniversalRenderPipeline.asset?.perObjectShadowShadowMapResolution ?? (int)ShadowResolution._2048;
+                if (!Enum.IsDefined(typeof(ShadowResolution), resolutionSetting))
+                    resolutionSetting = (int)ShadowResolution._2048;
+            }
+
             m_Resolution = PerObjectShadowUtils.GetPerObjectShadowMapResolution(resolutionSetting, m_ValidObjectsNum);
             m_TileResolution = PerObjectShadowUtils.GetPerObjectTileResolutionInAtlas(m_Resolution.x, m_Resolution.y, m_ValidObjectsNum);
+            if (m_TileResolution <= 0)
+                return false;
 
 
-            m_DrawCallSystem.Execute(m_TileResolution, m_Resolution.x, m_Resolution.y);
+            m_DrawCallSystem.Execute(m_TileResolution, m_Resolution.x, m_Resolution.y, m_ValidObjectsNum);
             
             // RTHandle.ReAllocateIfNeeded
             //ShadowUtils.ShadowRTReAllocateIfNeeded(ref m_PerObjectShadowMapTexture, resolution.x, resolution.y, k_ShadowmapBufferBits, name: "_PerObjectShadowmapTexture");

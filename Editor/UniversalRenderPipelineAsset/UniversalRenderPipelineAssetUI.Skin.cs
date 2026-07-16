@@ -108,9 +108,16 @@ namespace UnityEditor.Rendering.Universal
             {
                 EditorGUIUtility.TrTextContent(nameof(SoftShadowQuality.Low)),
                 EditorGUIUtility.TrTextContent(nameof(SoftShadowQuality.Medium)),
-                EditorGUIUtility.TrTextContent(nameof(SoftShadowQuality.High))
+                EditorGUIUtility.TrTextContent(nameof(SoftShadowQuality.High)),
+                EditorGUIUtility.TrTextContent(nameof(SoftShadowQuality.Ultra))
             };
-            public static int[] softShadowsQualityAssetValues =  { (int)SoftShadowQuality.Low, (int)SoftShadowQuality.Medium, (int)SoftShadowQuality.High };
+            public static int[] softShadowsQualityAssetValues =
+            {
+                (int)SoftShadowQuality.Low,
+                (int)SoftShadowQuality.Medium,
+                (int)SoftShadowQuality.High,
+                (int)SoftShadowQuality.Ultra
+            };
 
             // Per Object Shadow settings
             public static GUIContent POShadowMaxObjectsCountText = EditorGUIUtility.TrTextContent("Max Objects Count", "Maximum shadow rendering objects num.");

@@ -148,6 +148,9 @@ namespace UnityEngine.Rendering.Universal
                 engineCascadeIndex, engineCascadeCount, engineCascadeSplits, shadowResolution, shadowNearPlane, out shadowSliceData.viewMatrix, out shadowSliceData.projectionMatrix,
                 out shadowSliceData.splitData);
 
+            if (success)
+                ApplyDirectionalLightTexelSnapping(ref shadowSliceData.viewMatrix, ref shadowSliceData.projectionMatrix, shadowResolution);
+
             cascadeSplitDistance = shadowSliceData.splitData.cullingSphere;
             shadowSliceData.offsetX = (cascadeIndex % 2) * shadowResolution;
             shadowSliceData.offsetY = (cascadeIndex / 2) * shadowResolution;
@@ -164,6 +167,26 @@ namespace UnityEngine.Rendering.Universal
                 ApplySliceTransform(ref shadowSliceData, shadowmapWidth, shadowmapHeight);
 
             return success;
+        }
+
+        /// <summary>
+        /// 将方向光正交投影对齐到阴影贴图的纹素网格，减少相机移动时的阴影抖动。
+        /// </summary>
+        static void ApplyDirectionalLightTexelSnapping(ref Matrix4x4 viewMatrix, ref Matrix4x4 projectionMatrix,
+            int shadowResolution)
+        {
+            if (shadowResolution <= 0)
+                return;
+
+            Matrix4x4 worldToClip = projectionMatrix * viewMatrix;
+            Vector3 shadowOrigin = worldToClip.MultiplyPoint(Vector3.zero);
+            float halfResolution = shadowResolution * 0.5f;
+
+            float offsetX = (Mathf.Round(shadowOrigin.x * halfResolution) - shadowOrigin.x * halfResolution) / halfResolution;
+            float offsetY = (Mathf.Round(shadowOrigin.y * halfResolution) - shadowOrigin.y * halfResolution) / halfResolution;
+
+            projectionMatrix.m03 += offsetX;
+            projectionMatrix.m13 += offsetY;
         }
 
         /// <summary>
@@ -485,6 +508,10 @@ namespace UnityEngine.Rendering.Universal
             float depthBias = -bias[shadowLightIndex].x * texelSize;
             float normalBias = -bias[shadowLightIndex].y * texelSize;
 
+            // Directional depth bias is applied per cascade on the receiver side.
+            if (shadowLight.lightType == LightType.Directional)
+                depthBias = 0.0f;
+
             // The current implementation of NormalBias in Universal RP is the same as in Unity Built-In RP (i.e moving shadow caster vertices along normals when projecting them to the shadow map).
             // This does not work well with Point Lights, which is why NormalBias value is hard-coded to 0.0 in Built-In RP (see value of unity_LightShadowBias.z in FrameDebugger, and native code that sets it: https://github.cds.internal.unity3d.com/unity/unity/blob/a9c916ba27984da43724ba18e70f51469e0c34f5/Runtime/Camera/Shadows.cpp#L1686 )
             // We follow the same convention in Universal RP:
@@ -506,6 +533,7 @@ namespace UnityEngine.Rendering.Universal
 
                 switch (softShadowQuality)
                 {
+                    case SoftShadowQuality.Ultra:
                     case SoftShadowQuality.High: kernelRadius = 3.5f; break; // 7x7
                     case SoftShadowQuality.Medium: kernelRadius = 2.5f; break; // 5x5
                     case SoftShadowQuality.Low: kernelRadius = 1.5f; break; // 3x3
@@ -517,6 +545,21 @@ namespace UnityEngine.Rendering.Universal
             }
 
             return new Vector4(depthBias, normalBias, (float)shadowLight.lightType, 0.0f);
+        }
+
+        /// <summary>
+        /// 将方向光世界空间深度偏移转换为当前级联使用的归一化阴影深度。
+        /// </summary>
+        internal static float GetDirectionalLightReceiverDepthBias(float rawDepthBias,
+            Matrix4x4 lightProjectionMatrix, int shadowResolution)
+        {
+            if (shadowResolution <= 0)
+                return 0.0f;
+
+            float frustumSize = Mathf.Abs(2.0f / lightProjectionMatrix.m00);
+            float depthRange = Mathf.Abs(2.0f / lightProjectionMatrix.m22);
+            float texelSizeWS = frustumSize / shadowResolution;
+            return Mathf.Max(rawDepthBias, 0.0f) * texelSizeWS / Mathf.Max(depthRange, Mathf.Epsilon);
         }
 
 
@@ -728,16 +771,15 @@ namespace UnityEngine.Rendering.Universal
 
         internal static float SoftShadowQualityToShaderProperty(Light light, bool softShadowsEnabled)
         {
-            float softShadows = softShadowsEnabled ? 1.0f : 0.0f;
-            if (light.TryGetComponent(out UniversalAdditionalLightData additionalLightData))
-            {
-                var softShadowQuality = (additionalLightData.softShadowQuality == SoftShadowQuality.UsePipelineSettings)
-                    ? UniversalRenderPipeline.asset?.softShadowQuality
-                    : additionalLightData.softShadowQuality;
-                softShadows *= Math.Max((int)softShadowQuality, (int)SoftShadowQuality.Low);
-            }
+            if (!softShadowsEnabled)
+                return 0.0f;
 
-            return softShadows;
+            SoftShadowQuality softShadowQuality = UniversalRenderPipeline.asset?.softShadowQuality ?? SoftShadowQuality.Medium;
+            if (light.TryGetComponent(out UniversalAdditionalLightData additionalLightData) &&
+                additionalLightData.softShadowQuality != SoftShadowQuality.UsePipelineSettings)
+                softShadowQuality = additionalLightData.softShadowQuality;
+
+            return Math.Max((int)softShadowQuality, (int)SoftShadowQuality.Low);
         }
 
         internal static bool SupportsPerLightSoftShadowQuality()
@@ -783,7 +825,9 @@ namespace UnityEngine.Rendering.Universal
                     cmd.SetKeyword(ShaderGlobalKeywords.SoftShadowsHigh, false);
                     cmd.SetKeyword(ShaderGlobalKeywords.SoftShadows, false);
                 }
-                else if (shadowData.isKeywordSoftShadowsEnabled && UniversalRenderPipeline.asset?.softShadowQuality == SoftShadowQuality.High)
+                else if (shadowData.isKeywordSoftShadowsEnabled &&
+                    (UniversalRenderPipeline.asset?.softShadowQuality == SoftShadowQuality.High ||
+                     UniversalRenderPipeline.asset?.softShadowQuality == SoftShadowQuality.Ultra))
                 {
                     cmd.SetKeyword(ShaderGlobalKeywords.SoftShadowsLow, false);
                     cmd.SetKeyword(ShaderGlobalKeywords.SoftShadowsMedium, false);

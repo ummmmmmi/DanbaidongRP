@@ -92,25 +92,40 @@ namespace UnityEngine.Rendering.Universal
             this.maxDrawDistance = maxDrawDistance;
         }
 
-        public void Execute(int tileResolution, int shadowmapWidth, int shadowmapHeight)
+        public void Execute(int tileResolution, int shadowmapWidth, int shadowmapHeight, int maxDrawCount)
         {
             using (new ProfilingScope(m_Sampler))
             {
                 int shadowmapTileIndex = 0;
+                int remainingDrawCount = Mathf.Max(maxDrawCount, 0);
                 for (int i = 0; i < m_EntityManager.chunkCount; ++i)
                 {
-                    Execute(m_EntityManager.cachedChunks[i], m_EntityManager.culledChunks[i], m_EntityManager.drawCallChunks[i], 
-                        shadowmapTileIndex, tileResolution, shadowmapWidth, shadowmapHeight, m_EntityManager.cachedChunks[i].count);
-                    shadowmapTileIndex += m_EntityManager.culledChunks[i].visibleObjectShadowCount;
+                    ObjectShadowDrawCallChunk drawCallChunk = m_EntityManager.drawCallChunks[i];
+                    drawCallChunk.currentJobHandle.Complete();
+                    drawCallChunk.drawCallCount = 0;
+
+                    int visibleObjectCount = Mathf.Min(
+                        m_EntityManager.culledChunks[i].visibleObjectShadowCount,
+                        remainingDrawCount);
+                    if (visibleObjectCount > 0)
+                    {
+                        Execute(m_EntityManager.cachedChunks[i], m_EntityManager.culledChunks[i], drawCallChunk,
+                            shadowmapTileIndex, tileResolution, shadowmapWidth, shadowmapHeight,
+                            m_EntityManager.cachedChunks[i].count, visibleObjectCount);
+                    }
+
+                    shadowmapTileIndex += visibleObjectCount;
+                    remainingDrawCount -= visibleObjectCount;
                 }
                     
             }
         }
 
         private void Execute(ObjectShadowCachedChunk cachedChunk, ObjectShadowCulledChunk culledChunk, ObjectShadowDrawCallChunk drawCallChunk, 
-                                int tileIndex, int tileResolution, int shadowmapWidth, int shadowmapHeight, int count)
+                                int tileIndex, int tileResolution, int shadowmapWidth, int shadowmapHeight, int count,
+                                int visibleObjectCount)
         {
-            if (count == 0)
+            if (count == 0 || visibleObjectCount == 0)
                 return;
 
             ObjectShadowDrawCallJob drawCallJob = new ObjectShadowDrawCallJob()
@@ -124,7 +139,7 @@ namespace UnityEngine.Rendering.Universal
                 shadowmapHeight = shadowmapHeight,
 
                 visibleObjectShadowIndices = culledChunk.visibleObjectShadowIndices,
-                visibleObjectShadowCount = culledChunk.visibleObjectShadowCount,
+                visibleObjectShadowCount = visibleObjectCount,
                 maxDrawDistance = m_MaxDrawDistance,
 
                 shadowToWorldMatrices = drawCallChunk.shadowToWorldMatrices,

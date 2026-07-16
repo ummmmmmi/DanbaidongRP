@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine.Rendering.RenderGraphModule;
 
 namespace UnityEngine.Rendering.Universal
@@ -17,6 +18,7 @@ namespace UnityEngine.Rendering.Universal
         private static ProfilingSampler m_SSDS_RTRT_ClassifyTiles_ProfilingSampler = new ProfilingSampler(m_SSDS_RTRT_ClassifyTilesProfilerTag);
         private static ProfilingSampler m_SSDS_AccumulateProfilingSampler = new ProfilingSampler(m_SSDS_AccumulateProfilerTag);
         private static ProfilingSampler m_SSDS_EAWProfilingSampler = new ProfilingSampler(m_SSDS_EAWProfilerTag);
+        private static readonly ProfilingSampler s_ContactShadowsProfilingSampler = new ProfilingSampler("SSDS Contact Shadows");
 
         // Public Variables
 
@@ -30,7 +32,10 @@ namespace UnityEngine.Rendering.Universal
         private int m_BilateralVKernel;
         private int m_AccumulateKernel;
         private int m_AccumulateFinalKernel;
+        private int m_RasterAccumulateKernel;
         private int m_EdgeAvoidATrousWaveletKernel;
+        private int m_ContactShadowsKernel;
+        private readonly Dictionary<int, (int frame, int width, int height)> m_RasterShadowHistoryStates = new();
 
         // Constants
         private const int c_screenSpaceShadowsTileSize = 16;
@@ -52,7 +57,9 @@ namespace UnityEngine.Rendering.Universal
             m_BilateralVKernel = m_ShadowDenoiserCS.FindKernel("BilateralFilterV");
             m_AccumulateKernel = m_ShadowDenoiserCS.FindKernel("ShadowAccumulate");
             m_AccumulateFinalKernel = m_ShadowDenoiserCS.FindKernel("ShadowAccumulateFinal");
+            m_RasterAccumulateKernel = m_ShadowDenoiserCS.FindKernel("RasterShadowAccumulate");
             m_EdgeAvoidATrousWaveletKernel = m_ShadowDenoiserCS.FindKernel("EdgeAvoidATrousWavelet");
+            m_ContactShadowsKernel = m_ScreenSpaceDirectionalShadowsCS.FindKernel("ContactShadows");
         }
 
         static RTHandle HistoryTracedShadowTextureAllocator(RenderTextureDescriptor desc, string viewName, int frameIndex, RTHandleSystem rtHandleSystem)
@@ -91,6 +98,18 @@ namespace UnityEngine.Rendering.Universal
                 name: string.Format("{0}_TracedShadowMomentsTexture{1}", viewName, frameIndex));
         }
 
+        /// <summary>
+        /// 分配 Raster 阴影法线与级联索引历史纹理。
+        /// </summary>
+        static RTHandle HistoryShadowMetadataTextureAllocator(RenderTextureDescriptor desc, string viewName, int frameIndex, RTHandleSystem rtHandleSystem)
+        {
+            frameIndex &= 1;
+
+            return rtHandleSystem.Alloc(Vector2.one, TextureXR.slices, colorFormat: desc.graphicsFormat,
+                filterMode: FilterMode.Point, enableRandomWrite: true, useDynamicScale: true,
+                name: string.Format("{0}_ScreenSpaceShadowMetadataTexture{1}", viewName, frameIndex));
+        }
+
         internal void ReAllocatedShadowMomentsTextureIfNeeded(HistoryFrameRTSystem historyRTSystem, UniversalCameraData cameraData, RenderTextureDescriptor desc, out RTHandle currFrameRT, out RTHandle prevFrameRT)
         {
             var curTexture = historyRTSystem.GetCurrentFrameRT(HistoryFrameType.RaytracedShadowMoments);
@@ -107,6 +126,61 @@ namespace UnityEngine.Rendering.Universal
             prevFrameRT = historyRTSystem.GetPreviousFrameRT(HistoryFrameType.RaytracedShadowMoments);
         }
 
+        /// <summary>
+        /// 为 Raster Ultra 阴影分配独立的颜色、矩和几何元数据双缓冲历史。
+        /// </summary>
+        private bool ReAllocateRasterShadowHistoryIfNeeded(HistoryFrameRTSystem historyRTSystem,
+            UniversalCameraData cameraData, RenderTextureDescriptor shadowDesc,
+            out RTHandle currentShadow, out RTHandle previousShadow,
+            out RTHandle currentMoments, out RTHandle previousMoments,
+            out RTHandle currentMetadata, out RTHandle previousMetadata)
+        {
+            bool historyAllocated = historyRTSystem.GetCurrentFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadow) != null &&
+                historyRTSystem.GetCurrentFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadowMoments) != null &&
+                historyRTSystem.GetCurrentFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadowMetadata) != null;
+
+            if (historyRTSystem.GetCurrentFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadow) == null)
+            {
+                historyRTSystem.ReleaseHistoryFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadow);
+                historyRTSystem.AllocHistoryFrameRT((int)HistoryFrameType.ScreenSpaceDirectionalShadow,
+                    cameraData.camera.name, HistoryTracedShadowTextureAllocator, shadowDesc, 2);
+            }
+
+            RenderTextureDescriptor momentsDesc = shadowDesc;
+            momentsDesc.colorFormat = RenderTextureFormat.RGB111110Float;
+            if (historyRTSystem.GetCurrentFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadowMoments) == null)
+            {
+                historyRTSystem.ReleaseHistoryFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadowMoments);
+                historyRTSystem.AllocHistoryFrameRT((int)HistoryFrameType.ScreenSpaceDirectionalShadowMoments,
+                    cameraData.camera.name, HistoryShadowMomentsTextureAllocator, momentsDesc, 2);
+            }
+
+            RenderTextureDescriptor metadataDesc = shadowDesc;
+            metadataDesc.colorFormat = RenderTextureFormat.ARGBHalf;
+            if (historyRTSystem.GetCurrentFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadowMetadata) == null)
+            {
+                historyRTSystem.ReleaseHistoryFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadowMetadata);
+                historyRTSystem.AllocHistoryFrameRT((int)HistoryFrameType.ScreenSpaceDirectionalShadowMetadata,
+                    cameraData.camera.name, HistoryShadowMetadataTextureAllocator, metadataDesc, 2);
+            }
+
+            currentShadow = historyRTSystem.GetCurrentFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadow);
+            previousShadow = historyRTSystem.GetPreviousFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadow);
+            currentMoments = historyRTSystem.GetCurrentFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadowMoments);
+            previousMoments = historyRTSystem.GetPreviousFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadowMoments);
+            currentMetadata = historyRTSystem.GetCurrentFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadowMetadata);
+            previousMetadata = historyRTSystem.GetPreviousFrameRT(HistoryFrameType.ScreenSpaceDirectionalShadowMetadata);
+
+            int cameraId = cameraData.camera.GetInstanceID();
+            int currentFrame = historyRTSystem.historyFrameCount;
+            bool consecutiveFrame = m_RasterShadowHistoryStates.TryGetValue(cameraId, out var previousState) &&
+                previousState.frame == currentFrame - 1 &&
+                previousState.width == shadowDesc.width && previousState.height == shadowDesc.height;
+            m_RasterShadowHistoryStates[cameraId] = (currentFrame, shadowDesc.width, shadowDesc.height);
+
+            return historyAllocated && consecutiveFrame;
+        }
+
         private class PassData
         {
             // Compute shader
@@ -119,7 +193,9 @@ namespace UnityEngine.Rendering.Universal
             internal int bilateralVKernel;
             internal int accumulateKernel;
             internal int accumulateFinalKernel;
+            internal int rasterAccumulateKernel;
             internal int eawKernel;
+            internal int contactShadowsKernel;
 
             internal int numTilesX;
             internal int numTilesY;
@@ -139,10 +215,13 @@ namespace UnityEngine.Rendering.Universal
             internal TextureHandle shadowMomentsTex;
             internal TextureHandle prevShadowMomentsTex;
             internal TextureHandle normalGBuffer;
+            internal TextureHandle materialGBuffer;
             internal TextureHandle stencilHandle;
             internal TextureHandle motionVectorTexture;
             internal TextureHandle prevCameraDepthTexture;
             internal TextureHandle meanVarianceTexture;
+            internal TextureHandle shadowMetadataTex;
+            internal TextureHandle prevShadowMetadataTex;
 
             internal int camHistoryFrameCount;
             internal TextureHandle blueNoiseArray;
@@ -159,6 +238,14 @@ namespace UnityEngine.Rendering.Universal
             internal float rayTracingDirShadowCharHalfDirScale;
             internal bool enableDenoiser;
             internal bool enableEAWBlur;
+            internal bool enableRasterDenoiser;
+            internal bool shadowHistoryValid;
+            internal bool hasMotionData;
+            internal bool enableContactShadows;
+
+            internal Vector4 contactShadowParams0;
+            internal Vector4 contactShadowParams1;
+            internal int contactShadowSampleCount;
 
             internal Matrix4x4 clipToPrevClipMatrix;
         }
@@ -184,7 +271,9 @@ namespace UnityEngine.Rendering.Universal
             passData.bilateralVKernel = m_BilateralVKernel;
             passData.accumulateKernel = m_AccumulateKernel;
             passData.accumulateFinalKernel = m_AccumulateFinalKernel;
+            passData.rasterAccumulateKernel = m_RasterAccumulateKernel;
             passData.eawKernel = m_EdgeAvoidATrousWaveletKernel;
+            passData.contactShadowsKernel = m_ContactShadowsKernel;
 
             passData.camHistoryFrameCount = historyFramCount;
             passData.blueNoiseArray = resourceData.blueNoise128RG;
@@ -212,6 +301,7 @@ namespace UnityEngine.Rendering.Universal
 
 
             passData.normalGBuffer = resourceData.gBuffer[2]; // Normal GBuffer
+            passData.materialGBuffer = resourceData.gBuffer[0];
             passData.stencilHandle = resourceData.activeDepthTexture;
             passData.motionVectorTexture = resourceData.motionVectorColor;
 
@@ -219,11 +309,13 @@ namespace UnityEngine.Rendering.Universal
 
 
             MotionVectorsPersistentData motionData = null;
+            passData.clipToPrevClipMatrix = Matrix4x4.identity;
             if (cameraData.camera.TryGetComponent<UniversalAdditionalCameraData>(out var additionalCameraData))
                 motionData = additionalCameraData.motionVectorsPersistentData;
             if (motionData != null)
             {
                 passData.clipToPrevClipMatrix = motionData.previousViewProjection * Matrix4x4.Inverse(motionData.viewProjection);
+                passData.hasMotionData = true;
             }
 
         }
@@ -312,12 +404,95 @@ namespace UnityEngine.Rendering.Universal
             }
         }
 
+        /// <summary>
+        /// 判断当前主方向光是否需要 Raster Ultra 时空阴影降噪。
+        /// </summary>
+        private static bool IsRasterShadowDenoiserRequired(UniversalLightData lightData, UniversalShadowData shadowData)
+        {
+            if (UniversalRenderPipeline.asset?.softShadowQuality != SoftShadowQuality.Ultra ||
+                !shadowData.supportsMainLightShadows || !shadowData.supportsSoftShadows ||
+                lightData.mainLightIndex < 0)
+                return false;
+
+            Light mainLight = lightData.visibleLights[lightData.mainLightIndex].light;
+            return mainLight != null && mainLight.shadows == LightShadows.Soft &&
+                ShadowUtils.SoftShadowQualityToShaderProperty(mainLight, true) >= (float)SoftShadowQuality.Ultra;
+        }
+
+        /// <summary>
+        /// 初始化 Raster Ultra 阴影降噪所需的历史纹理和临时纹理。
+        /// </summary>
+        private void InitRasterDenoiserPassData(RenderGraph renderGraph, PassData passData,
+            UniversalCameraData cameraData, UniversalResourceData resourceData)
+        {
+            RenderTextureDescriptor shadowDesc = cameraData.cameraTargetDescriptor;
+            shadowDesc.colorFormat = RenderTextureFormat.R16;
+            shadowDesc.depthBufferBits = 0;
+            shadowDesc.enableRandomWrite = true;
+
+            HistoryFrameRTSystem historyRTSystem = HistoryFrameRTSystem.GetOrCreate(cameraData.camera);
+            RTHandle previousDepth = historyRTSystem?.GetPreviousFrameRT(HistoryFrameType.Depth);
+            bool hasPreviousDepth = previousDepth != null;
+            passData.prevCameraDepthTexture = hasPreviousDepth
+                ? renderGraph.ImportTexture(previousDepth)
+                : resourceData.cameraDepthTexture;
+
+            passData.shadowHistoryValid = ReAllocateRasterShadowHistoryIfNeeded(historyRTSystem,
+                cameraData, shadowDesc,
+                out RTHandle currentShadow, out RTHandle previousShadow,
+                out RTHandle currentMoments, out RTHandle previousMoments,
+                out RTHandle currentMetadata, out RTHandle previousMetadata) &&
+                hasPreviousDepth && passData.hasMotionData;
+
+            passData.tracedShadowTex = renderGraph.ImportTexture(currentShadow);
+            passData.prevTracedShadowTex = renderGraph.ImportTexture(previousShadow);
+            passData.shadowMomentsTex = renderGraph.ImportTexture(currentMoments);
+            passData.prevShadowMomentsTex = renderGraph.ImportTexture(previousMoments);
+            passData.shadowMetadataTex = renderGraph.ImportTexture(currentMetadata);
+            passData.prevShadowMetadataTex = renderGraph.ImportTexture(previousMetadata);
+
+            RenderTextureDescriptor meanVarianceDesc = shadowDesc;
+            meanVarianceDesc.colorFormat = RenderTextureFormat.RG32;
+            passData.meanVarianceTexture = UniversalRenderer.CreateRenderGraphTexture(renderGraph,
+                meanVarianceDesc, "_RasterShadowMeanVarianceTexture", true, Color.white);
+            passData.enableEAWBlur = true;
+        }
+
+        /// <summary>
+        /// 初始化 Raster 主方向光的近距离接触阴影参数。
+        /// </summary>
+        private static void InitContactShadowsPassData(PassData passData, UniversalLightData lightData,
+            UniversalShadowData shadowData)
+        {
+            passData.enableContactShadows = false;
+
+            Shadows settings = VolumeManager.instance.stack.GetComponent<Shadows>();
+            if (settings == null || !settings.active || !settings.contactShadows.value ||
+                !shadowData.supportsMainLightShadows || lightData.mainLightIndex < 0)
+                return;
+
+            Light mainLight = lightData.visibleLights[lightData.mainLightIndex].light;
+            if (mainLight == null || mainLight.shadows == LightShadows.None)
+                return;
+
+            float maxDistance = settings.contactShadowDistance.value;
+            float fadeDistance = Mathf.Min(settings.contactShadowFadeDistance.value, maxDistance);
+            passData.contactShadowParams0 = new Vector4(settings.contactShadowLength.value, maxDistance,
+                fadeDistance, settings.contactShadowThickness.value);
+            passData.contactShadowParams1 = new Vector4(settings.contactShadowIntensity.value,
+                settings.contactShadowNormalBias.value, settings.contactShadowJitter.value,
+                settings.contactShadowRayFadeStart.value);
+            passData.contactShadowSampleCount = settings.contactShadowSampleCount.value;
+            passData.enableContactShadows = settings.contactShadowIntensity.value > 0.0f;
+        }
+
         private static void ExecuteRayTracingShadowsPass(PassData data, ComputeGraphContext context)
         {
             var cmd = context.cmd;
 
             bool needDenoiser = data.enableDenoiser && data.rayTracingDirShadowPenumbra != 0;
             bool needEAWFilter = data.enableEAWBlur;
+            cmd.SetComputeIntParam(data.cs, ShaderConstants._RasterShadowDenoiser, 0);
 
             using (new ProfilingScope(cmd, m_SSDS_RTRT_ClassifyTiles_ProfilingSampler))
             {
@@ -332,6 +507,8 @@ namespace UnityEngine.Rendering.Universal
                 cmd.SetComputeTextureParam(data.cs, data.rayTracingClassifyKernel, ShaderConstants._TracedShadowTexture, data.tracedShadowTex);
                 cmd.SetComputeTextureParam(data.cs, data.rayTracingClassifyKernel, ShaderConstants._StencilTexture, data.stencilHandle, 0, RenderTextureSubElement.Stencil);
                 cmd.SetComputeTextureParam(data.cs, data.rayTracingClassifyKernel, ShaderConstants._ShadowMomentstexture, data.shadowMomentsTex);
+                cmd.SetComputeTextureParam(data.cs, data.rayTracingClassifyKernel, ShaderConstants._GBuffer0, data.materialGBuffer);
+                cmd.SetComputeTextureParam(data.cs, data.rayTracingClassifyKernel, ShaderConstants._GBuffer2, data.normalGBuffer);
 
                 cmd.DispatchCompute(data.cs, data.rayTracingClassifyKernel, data.numTilesX, data.numTilesY, 1);
             }
@@ -369,6 +546,7 @@ namespace UnityEngine.Rendering.Universal
             using (new ProfilingScope(cmd, m_SSDS_AccumulateProfilingSampler))
             {
                 var accumulateKernel = needEAWFilter ? data.accumulateKernel : data.accumulateFinalKernel;
+                cmd.SetComputeTextureParam(data.denoiserCS, accumulateKernel, ShaderConstants._CurrentShadowTexture, data.tracedShadowTex);
                 cmd.SetComputeTextureParam(data.denoiserCS, accumulateKernel, ShaderConstants._TracedShadowTexture, data.tracedShadowTex);
                 cmd.SetComputeTextureParam(data.denoiserCS, accumulateKernel, ShaderConstants._PrevTracedShadowTexture, data.prevTracedShadowTex);
                 cmd.SetComputeTextureParam(data.denoiserCS, accumulateKernel, ShaderConstants._ShadowMomentstexture, data.shadowMomentsTex);
@@ -380,6 +558,8 @@ namespace UnityEngine.Rendering.Universal
                 cmd.SetComputeTextureParam(data.denoiserCS, accumulateKernel, ShaderConstants._PrevCameraDepthTexture, data.prevCameraDepthTexture);
                 cmd.SetComputeTextureParam(data.denoiserCS, accumulateKernel, ShaderConstants._MeanVarianceTexture, data.meanVarianceTexture);
                 cmd.SetComputeTextureParam(data.denoiserCS, accumulateKernel, ShaderConstants._SSDirShadowmapTexture, data.screenSpaceShadowmapTex);
+                cmd.SetComputeTextureParam(data.denoiserCS, accumulateKernel, ShaderConstants._GBuffer0, data.materialGBuffer);
+                cmd.SetComputeTextureParam(data.denoiserCS, accumulateKernel, ShaderConstants._GBuffer2, data.normalGBuffer);
 
                 cmd.SetComputeMatrixParam(data.denoiserCS, ShaderConstants._ClipToPrevClipMatrix, data.clipToPrevClipMatrix);
 
@@ -396,9 +576,74 @@ namespace UnityEngine.Rendering.Universal
                 cmd.SetComputeTextureParam(data.denoiserCS, data.eawKernel, ShaderConstants._MeanVarianceTexture, data.meanVarianceTexture);
                 cmd.SetComputeTextureParam(data.denoiserCS, data.eawKernel, ShaderConstants._SSDirShadowmapTexture, data.screenSpaceShadowmapTex);
                 cmd.SetComputeTextureParam(data.denoiserCS, data.eawKernel, ShaderConstants._TracedShadowTexture, data.tracedShadowTex);
+                cmd.SetComputeTextureParam(data.denoiserCS, data.eawKernel, ShaderConstants._GBuffer2, data.normalGBuffer);
 
                 cmd.SetComputeBufferParam(data.denoiserCS, data.eawKernel, ShaderConstants.g_TileList, data.tileListBuffer);
                 cmd.DispatchCompute(data.denoiserCS, data.eawKernel, data.dispatchIndirectBuffer, 0);
+            }
+        }
+
+        /// <summary>
+        /// 执行 Raster Ultra 阴影的时序累积和边缘感知滤波。
+        /// </summary>
+        private static void ExecuteRasterShadowDenoiserPass(PassData data, ComputeGraphContext context)
+        {
+            var cmd = context.cmd;
+
+            using (new ProfilingScope(cmd, m_SSDS_AccumulateProfilingSampler))
+            {
+                int kernel = data.rasterAccumulateKernel;
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._CurrentShadowTexture, data.screenSpaceShadowmapTex);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._TracedShadowTexture, data.tracedShadowTex);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._PrevTracedShadowTexture, data.prevTracedShadowTex);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._ShadowMomentstexture, data.shadowMomentsTex);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._PrevShadowMomentstexture, data.prevShadowMomentsTex);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._ShadowMetadataTexture, data.shadowMetadataTex);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._PrevShadowMetadataTexture, data.prevShadowMetadataTex);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._GBuffer0, data.materialGBuffer);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._GBuffer2, data.normalGBuffer);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._CameraMotionVectorsTexture, data.motionVectorTexture);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._PrevCameraDepthTexture, data.prevCameraDepthTexture);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._MeanVarianceTexture, data.meanVarianceTexture);
+                cmd.SetComputeTextureParam(data.denoiserCS, kernel, ShaderConstants._SSDirShadowmapTexture, data.screenSpaceShadowmapTex);
+                cmd.SetComputeMatrixParam(data.denoiserCS, ShaderConstants._ClipToPrevClipMatrix, data.clipToPrevClipMatrix);
+                cmd.SetComputeIntParam(data.denoiserCS, ShaderConstants._ShadowHistoryValid, data.shadowHistoryValid ? 1 : 0);
+                cmd.SetComputeBufferParam(data.denoiserCS, kernel, ShaderConstants.g_TileList, data.tileListBuffer);
+                cmd.DispatchCompute(data.denoiserCS, kernel, data.dispatchIndirectBuffer, 0);
+            }
+
+            using (new ProfilingScope(cmd, m_SSDS_EAWProfilingSampler))
+            {
+                cmd.SetComputeTextureParam(data.denoiserCS, data.eawKernel, ShaderConstants._MeanVarianceTexture, data.meanVarianceTexture);
+                cmd.SetComputeTextureParam(data.denoiserCS, data.eawKernel, ShaderConstants._SSDirShadowmapTexture, data.screenSpaceShadowmapTex);
+                cmd.SetComputeTextureParam(data.denoiserCS, data.eawKernel, ShaderConstants._GBuffer2, data.normalGBuffer);
+                cmd.SetComputeBufferParam(data.denoiserCS, data.eawKernel, ShaderConstants.g_TileList, data.tileListBuffer);
+                cmd.DispatchCompute(data.denoiserCS, data.eawKernel, data.dispatchIndirectBuffer, 0);
+            }
+        }
+
+        /// <summary>
+        /// 将短距离屏幕空间接触阴影合并到主方向光阴影。
+        /// </summary>
+        private static void ExecuteContactShadowsPass(PassData data, ComputeGraphContext context)
+        {
+            var cmd = context.cmd;
+            int kernel = data.contactShadowsKernel;
+
+            using (new ProfilingScope(cmd, s_ContactShadowsProfilingSampler))
+            {
+                cmd.SetComputeVectorParam(data.cs, ShaderConstants._ContactShadowParams0, data.contactShadowParams0);
+                cmd.SetComputeVectorParam(data.cs, ShaderConstants._ContactShadowParams1, data.contactShadowParams1);
+                cmd.SetComputeIntParam(data.cs, ShaderConstants._ContactShadowSampleCount, data.contactShadowSampleCount);
+                cmd.SetComputeTextureParam(data.cs, kernel, ShaderConstants._SSDirShadowmapTexture, data.screenSpaceShadowmapTex);
+                cmd.SetComputeTextureParam(data.cs, kernel, ShaderConstants._GBuffer0, data.materialGBuffer);
+                cmd.SetComputeTextureParam(data.cs, kernel, ShaderConstants._GBuffer2, data.normalGBuffer);
+                BlueNoiseSystem.BindSTBNParams(BlueNoiseTexFormat._128RG, cmd, data.cs, kernel,
+                    data.blueNoiseArray, data.enableRasterDenoiser ? data.camHistoryFrameCount : 0);
+
+                int groupsX = RenderingUtils.DivRoundUp(data.screenSpaceShadowmapSize.x, 8);
+                int groupsY = RenderingUtils.DivRoundUp(data.screenSpaceShadowmapSize.y, 8);
+                cmd.DispatchCompute(data.cs, kernel, groupsX, groupsY, 1);
             }
         }
 
@@ -407,6 +652,7 @@ namespace UnityEngine.Rendering.Universal
             var cmd = context.cmd;
 
             cmd.SetComputeFloatParam(data.cs, ShaderConstants._CamHistoryFrameCount, data.camHistoryFrameCount);
+            cmd.SetComputeIntParam(data.cs, ShaderConstants._RasterShadowDenoiser, data.enableRasterDenoiser ? 1 : 0);
 
             // BuildIndirect
             using (new ProfilingScope(cmd, m_SSDSClassifyTilesProfilingSampler))
@@ -417,6 +663,10 @@ namespace UnityEngine.Rendering.Universal
                 cmd.SetComputeTextureParam(data.cs, data.classifyTilesKernel, ShaderConstants._DirShadowmapTexture, data.dirShadowmapTex);
                 cmd.SetComputeTextureParam(data.cs, data.classifyTilesKernel, ShaderConstants._SSDirShadowmapTexture, data.screenSpaceShadowmapTex);
                 cmd.SetComputeTextureParam(data.cs, data.classifyTilesKernel, ShaderConstants._StencilTexture, data.stencilHandle, 0, RenderTextureSubElement.Stencil);
+                cmd.SetComputeTextureParam(data.cs, data.classifyTilesKernel, ShaderConstants._GBuffer0, data.materialGBuffer);
+                cmd.SetComputeTextureParam(data.cs, data.classifyTilesKernel, ShaderConstants._GBuffer2, data.normalGBuffer);
+                BlueNoiseSystem.BindSTBNParams(BlueNoiseTexFormat._128RG, cmd, data.cs,
+                    data.classifyTilesKernel, data.blueNoiseArray, data.enableRasterDenoiser ? data.camHistoryFrameCount : 0);
 
                 cmd.DispatchCompute(data.cs, data.classifyTilesKernel, data.numTilesX, data.numTilesY, 1);
             }
@@ -426,11 +676,19 @@ namespace UnityEngine.Rendering.Universal
             {
                 cmd.SetComputeTextureParam(data.cs, data.shadowmapKernel, ShaderConstants._DirShadowmapTexture, data.dirShadowmapTex);
                 cmd.SetComputeTextureParam(data.cs, data.shadowmapKernel, ShaderConstants._PCSSTexture, data.screenSpaceShadowmapTex);
+                BlueNoiseSystem.BindSTBNParams(BlueNoiseTexFormat._128RG, cmd, data.cs,
+                    data.shadowmapKernel, data.blueNoiseArray, data.enableRasterDenoiser ? data.camHistoryFrameCount : 0);
 
                 // Indirect buffer & dispatch
                 cmd.SetComputeBufferParam(data.cs, data.shadowmapKernel, ShaderConstants.g_TileList, data.tileListBuffer);
                 cmd.DispatchCompute(data.cs, data.shadowmapKernel, data.dispatchIndirectBuffer, argsOffset: 0);
             }
+
+            if (data.enableContactShadows)
+                ExecuteContactShadowsPass(data, context);
+
+            if (data.enableRasterDenoiser)
+                ExecuteRasterShadowDenoiserPass(data, context);
         }
 
         private static void ExecutePass(PassData data, ComputeGraphContext context)
@@ -465,13 +723,21 @@ namespace UnityEngine.Rendering.Universal
                 UniversalLightData lightData = frameData.Get<UniversalLightData>();
                 UniversalShadowData shadowData = frameData.Get<UniversalShadowData>();
 
+                // Setup shared pass data before selecting the shadow path.
+                InitPassData(renderGraph, passData, cameraData, resourceData, historyFramCount);
+
                 // Ray Tracing
                 passData.requireRayTracing = cameraData.supportedRayTracing && cameraData.rayTracingSystem.GetRayTracingState();
                 InitRayTracingPassData(renderGraph, passData, cameraData, resourceData);
                 shadowData.rayTracingShadowsEnabled = passData.requireRayTracing;
 
-                // Setup passData
-                InitPassData(renderGraph, passData, cameraData, resourceData, historyFramCount);
+                passData.enableRasterDenoiser = !passData.requireRayTracing &&
+                    IsRasterShadowDenoiserRequired(lightData, shadowData);
+                if (passData.enableRasterDenoiser)
+                    InitRasterDenoiserPassData(renderGraph, passData, cameraData, resourceData);
+
+                if (!passData.requireRayTracing)
+                    InitContactShadowsPassData(passData, lightData, shadowData);
 
                 // Setup builder state
                 builder.UseBuffer(passData.dispatchIndirectBuffer, AccessFlags.ReadWrite);
@@ -479,16 +745,29 @@ namespace UnityEngine.Rendering.Universal
                 builder.UseTexture(passData.dirShadowmapTex, AccessFlags.Read);
                 builder.UseTexture(passData.screenSpaceShadowmapTex, AccessFlags.ReadWrite);
                 builder.UseTexture(passData.normalGBuffer, AccessFlags.Read);
+                builder.UseTexture(passData.materialGBuffer, AccessFlags.Read);
                 builder.UseTexture(passData.stencilHandle, AccessFlags.Read);
+                builder.UseTexture(passData.blueNoiseArray, AccessFlags.Read);
 
                 builder.UseBuffer(passData.raysCoordBuffer, AccessFlags.ReadWrite);
                 if (passData.requireRayTracing)
                 {
                     builder.UseTexture(passData.tracedShadowTex, AccessFlags.ReadWrite);
-                    builder.UseTexture(passData.prevTracedShadowTex, AccessFlags.ReadWrite);
+                    builder.UseTexture(passData.prevTracedShadowTex, AccessFlags.Read);
                     builder.UseTexture(passData.shadowMomentsTex, AccessFlags.ReadWrite);
-                    builder.UseTexture(passData.prevShadowMomentsTex, AccessFlags.ReadWrite);
-                    builder.UseTexture(passData.blueNoiseArray, AccessFlags.Read);
+                    builder.UseTexture(passData.prevShadowMomentsTex, AccessFlags.Read);
+                    builder.UseTexture(passData.motionVectorTexture, AccessFlags.Read);
+                    builder.UseTexture(passData.prevCameraDepthTexture, AccessFlags.Read);
+                    builder.UseTexture(passData.meanVarianceTexture, AccessFlags.ReadWrite);
+                }
+                else if (passData.enableRasterDenoiser)
+                {
+                    builder.UseTexture(passData.tracedShadowTex, AccessFlags.ReadWrite);
+                    builder.UseTexture(passData.prevTracedShadowTex, AccessFlags.Read);
+                    builder.UseTexture(passData.shadowMomentsTex, AccessFlags.ReadWrite);
+                    builder.UseTexture(passData.prevShadowMomentsTex, AccessFlags.Read);
+                    builder.UseTexture(passData.shadowMetadataTex, AccessFlags.Write);
+                    builder.UseTexture(passData.prevShadowMetadataTex, AccessFlags.Read);
                     builder.UseTexture(passData.motionVectorTexture, AccessFlags.Read);
                     builder.UseTexture(passData.prevCameraDepthTexture, AccessFlags.Read);
                     builder.UseTexture(passData.meanVarianceTexture, AccessFlags.ReadWrite);
@@ -521,6 +800,7 @@ namespace UnityEngine.Rendering.Universal
             public static readonly int _PCSSTexture = Shader.PropertyToID("_PCSSTexture");
             public static readonly int _BilateralTexture = Shader.PropertyToID("_BilateralTexture");
             public static readonly int _CamHistoryFrameCount = Shader.PropertyToID("_CamHistoryFrameCount");
+            public static readonly int _RasterShadowDenoiser = Shader.PropertyToID("_RasterShadowDenoiser");
 
             public static readonly int _RayTracingShadowsTextureRW = Shader.PropertyToID("_RayTracingShadowsTextureRW");
             public static readonly int _StencilTexture = Shader.PropertyToID("_StencilTexture");
@@ -530,12 +810,21 @@ namespace UnityEngine.Rendering.Universal
             public static readonly int _RayTracingDirShadowCharacterHalfDirScale = Shader.PropertyToID("_RayTracingDirShadowCharacterHalfDirScale");
 
             public static readonly int _TracedShadowTexture = Shader.PropertyToID("_TracedShadowTexture");
+            public static readonly int _CurrentShadowTexture = Shader.PropertyToID("_CurrentShadowTexture");
             public static readonly int _PrevTracedShadowTexture = Shader.PropertyToID("_PrevTracedShadowTexture");
             public static readonly int _CameraMotionVectorsTexture = Shader.PropertyToID("_CameraMotionVectorsTexture");
             public static readonly int _PrevCameraDepthTexture = Shader.PropertyToID("_PrevCameraDepthTexture");
             public static readonly int _ShadowMomentstexture = Shader.PropertyToID("_ShadowMomentstexture");
             public static readonly int _PrevShadowMomentstexture = Shader.PropertyToID("_PrevShadowMomentstexture");
             public static readonly int _MeanVarianceTexture = Shader.PropertyToID("_MeanVarianceTexture");
+            public static readonly int _ShadowMetadataTexture = Shader.PropertyToID("_ShadowMetadataTexture");
+            public static readonly int _PrevShadowMetadataTexture = Shader.PropertyToID("_PrevShadowMetadataTexture");
+            public static readonly int _ShadowHistoryValid = Shader.PropertyToID("_ShadowHistoryValid");
+            public static readonly int _GBuffer0 = Shader.PropertyToID("_GBuffer0");
+            public static readonly int _GBuffer2 = Shader.PropertyToID("_GBuffer2");
+            public static readonly int _ContactShadowParams0 = Shader.PropertyToID("_ContactShadowParams0");
+            public static readonly int _ContactShadowParams1 = Shader.PropertyToID("_ContactShadowParams1");
+            public static readonly int _ContactShadowSampleCount = Shader.PropertyToID("_ContactShadowSampleCount");
 
             public static readonly int _ClipToPrevClipMatrix = Shader.PropertyToID("_ClipToPrevClipMatrix");
 

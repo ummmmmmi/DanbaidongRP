@@ -15,6 +15,8 @@ namespace UnityEngine.Rendering.Universal.Internal
             public static int _ShadowParams;
             public static int _CascadeShadowSplitSpheres;
             public static int _CascadeShadowSplitSphereRadii;
+            public static int _CascadeShadowParams;
+            public static int _PerCascadeShadowBias;
             public static int _ShadowOffset0;
             public static int _ShadowOffset1;
             public static int _ShadowmapSize;
@@ -42,6 +44,7 @@ namespace UnityEngine.Rendering.Universal.Internal
         Vector4[] m_CascadeSplitDistances;
         Vector4[] m_CascadeSplitSphereRadii;
         Vector4[] m_PerCascadePCSSData;
+        Vector4[] m_PerCascadeShadowBias;
 
         bool m_CreateEmptyShadowmap;
         //bool m_EmptyShadowmapNeedsClear = false;
@@ -72,11 +75,14 @@ namespace UnityEngine.Rendering.Universal.Internal
             m_CascadeSplitDistances = new Vector4[k_MaxCascades];
             m_CascadeSplitSphereRadii = new Vector4[k_MaxCascades / 4];
             m_PerCascadePCSSData = new Vector4[k_MaxCascades];
+            m_PerCascadeShadowBias = new Vector4[k_MaxCascades];
 
             DirectionalLightsShadowConstantBuffer._WorldToShadow = Shader.PropertyToID("_MainLightWorldToShadow");
             DirectionalLightsShadowConstantBuffer._ShadowParams = Shader.PropertyToID("_MainLightShadowParams");
             DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSpheres = Shader.PropertyToID("_CascadeShadowSplitSpheres");
             DirectionalLightsShadowConstantBuffer._CascadeShadowSplitSphereRadii = Shader.PropertyToID("_CascadeShadowSplitSphereRadii");
+            DirectionalLightsShadowConstantBuffer._CascadeShadowParams = Shader.PropertyToID("_MainLightShadowCascadeParams");
+            DirectionalLightsShadowConstantBuffer._PerCascadeShadowBias = Shader.PropertyToID("_PerCascadeShadowBias");
             DirectionalLightsShadowConstantBuffer._ShadowOffset0 = Shader.PropertyToID("_MainLightShadowOffset0");
             DirectionalLightsShadowConstantBuffer._ShadowOffset1 = Shader.PropertyToID("_MainLightShadowOffset1");
             DirectionalLightsShadowConstantBuffer._ShadowmapSize = Shader.PropertyToID("_MainLightShadowmapSize");
@@ -203,6 +209,9 @@ namespace UnityEngine.Rendering.Universal.Internal
 
             for (int i = 0; i < m_CascadeSplitDistances.Length; i++)
                 m_PerCascadePCSSData[i] = new Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+
+            for (int i = 0; i < m_PerCascadeShadowBias.Length; ++i)
+                m_PerCascadeShadowBias[i] = Vector4.zero;
         }
 
         void SetEmptyMainLightCascadeShadowmap(RasterCommandBuffer cmd)
@@ -214,6 +223,7 @@ namespace UnityEngine.Rendering.Universal.Internal
         internal static void SetEmptyMainLightShadowParams(RasterCommandBuffer cmd)
         {
             cmd.SetGlobalVector(DirectionalLightsShadowConstantBuffer._ShadowParams, s_EmptyShadowParams);
+            cmd.SetGlobalVector(DirectionalLightsShadowConstantBuffer._CascadeShadowParams, new Vector4(1.0f, 0.0f, 0.0f, 0.0f));
             cmd.SetGlobalVector(DirectionalLightsShadowConstantBuffer._ShadowmapSize, s_EmptyShadowmapSize);
         }
 
@@ -251,17 +261,19 @@ namespace UnityEngine.Rendering.Universal.Internal
                 rasCmd.SetKeyword(ShaderGlobalKeywords.MainLightShadowCascades, data.shadowData.mainLightShadowCascadesCount > 1);
                 ShadowUtils.SetSoftShadowQualityShaderKeywords(rasCmd, data.shadowData);
 
-                SetupDirLightsShadowReceiverConstants(rasCmd, ref visMainLight, data.shadowData);
+                SetupDirLightsShadowReceiverConstants(rasCmd, ref visMainLight, shadowLightIndex, data.shadowData);
             }
         }
 
 
-        void SetupDirLightsShadowReceiverConstants(RasterCommandBuffer cmd, ref VisibleLight shadowLight, UniversalShadowData shadowData)
+        void SetupDirLightsShadowReceiverConstants(RasterCommandBuffer cmd, ref VisibleLight shadowLight,
+            int shadowLightIndex, UniversalShadowData shadowData)
         {
             Light light = shadowLight.light;
             bool softShadows = shadowLight.light.shadows == LightShadows.Soft && shadowData.supportsSoftShadows;
 
             int cascadeCount = m_ShadowCasterCascadesCount;
+            float rawDepthBias = shadowData.bias[shadowLightIndex].x;
             for (int i = 0; i < cascadeCount; ++i)
                 m_MainLightShadowMatrices[i] = m_CascadeSlices[i].shadowTransform;
 
@@ -295,9 +307,12 @@ namespace UnityEngine.Rendering.Universal.Internal
                 
 
                 m_PerCascadePCSSData[i] = new Vector4(1.0f / (radial2ShadowmapDepth), texelSizeWS, farToNear, 1.0f / halfBlockerSearchAngularDiameterTangent);
+                m_PerCascadeShadowBias[i].x = ShadowUtils.GetDirectionalLightReceiverDepthBias(rawDepthBias,
+                    m_CascadeSlices[i].projectionMatrix, m_CascadeSlices[i].resolution);
             }
 
             cmd.SetGlobalVectorArray(DirectionalLightsShadowConstantBuffer._PerCascadePCSSData, m_PerCascadePCSSData);
+            cmd.SetGlobalVectorArray(DirectionalLightsShadowConstantBuffer._PerCascadeShadowBias, m_PerCascadeShadowBias);
 
             float invShadowAtlasWidth = 1.0f / renderTargetWidth;
             float invShadowAtlasHeight = 1.0f / renderTargetHeight;
@@ -310,6 +325,8 @@ namespace UnityEngine.Rendering.Universal.Internal
             cmd.SetGlobalMatrixArray(DirectionalLightsShadowConstantBuffer._WorldToShadow, m_MainLightShadowMatrices);
             cmd.SetGlobalVector(DirectionalLightsShadowConstantBuffer._ShadowParams,
                 new Vector4(light.shadowStrength * m_volumeSettings.intensity.value, softShadowsProp, shadowFadeScale, shadowFadeBias));
+            cmd.SetGlobalVector(DirectionalLightsShadowConstantBuffer._CascadeShadowParams,
+                new Vector4(m_ShadowCasterCascadesCount, Mathf.Clamp01(m_CascadeBorder), 0.0f, 0.0f));
 
             if (m_ShadowCasterCascadesCount > 1)
             {

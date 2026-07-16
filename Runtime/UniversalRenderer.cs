@@ -1829,9 +1829,10 @@ namespace UnityEngine.Rendering.Universal
                 inputSummary.requiresMotionVectors = true;
             }
 
-            // RayTracing Shadow
+            // Temporal shadow denoisers need motion vectors and previous depth.
             var shadowSettings = VolumeManager.instance.stack.GetComponent<Shadows>();
-            if (shadowSettings != null && shadowSettings.rayTracing.value)
+            bool rasterShadowDenoiser = UniversalRenderPipeline.asset?.softShadowQuality == SoftShadowQuality.Ultra;
+            if ((shadowSettings != null && shadowSettings.rayTracing.value) || rasterShadowDenoiser)
             {
                 inputSummary.requiresMotionVectors = true;
                 inputSummary.requiresPrevDepthTexture = true;

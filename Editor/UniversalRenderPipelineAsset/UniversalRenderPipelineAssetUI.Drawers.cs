@@ -456,7 +456,7 @@ namespace UnityEditor.Rendering.Universal
                     selectedAssetSoftShadowQuality = EditorGUI.IntPopup(r, Styles.softShadowsQuality, selectedAssetSoftShadowQuality, Styles.softShadowsQualityAssetOptions, Styles.softShadowsQualityAssetValues);
                     if (checkScope.changed)
                     {
-                        serialized.softShadowQualityProp.intValue = Math.Clamp(selectedAssetSoftShadowQuality, (int)SoftShadowQuality.Low, (int)SoftShadowQuality.High);
+                        serialized.softShadowQualityProp.intValue = Math.Clamp(selectedAssetSoftShadowQuality, (int)SoftShadowQuality.Low, (int)SoftShadowQuality.Ultra);
                     }
                 }
             }

@@ -61,6 +61,36 @@ namespace UnityEngine.Rendering.Universal
         [Tooltip("Penumbra controls shadows soften width. (For Per Object Shadow)")]
         public ClampedFloatParameter perObjectShadowPenumbra = new ClampedFloatParameter(1.0f, 0.001f, 3.0f);
 
+        [Tooltip("Adds short-range screen-space contact shadows to raster directional shadows.")]
+        public BoolParameter contactShadows = new BoolParameter(false);
+
+        [Tooltip("Maximum world-space ray length used to find nearby occluders.")]
+        public ClampedFloatParameter contactShadowLength = new ClampedFloatParameter(0.5f, 0.01f, 5.0f);
+
+        [Tooltip("Maximum camera distance where contact shadows are visible.")]
+        public ClampedFloatParameter contactShadowDistance = new ClampedFloatParameter(20.0f, 0.1f, 100.0f);
+
+        [Tooltip("Distance range used to fade contact shadows before the maximum distance.")]
+        public ClampedFloatParameter contactShadowFadeDistance = new ClampedFloatParameter(5.0f, 0.01f, 50.0f);
+
+        [Tooltip("World-space depth tolerance used by the screen-space ray test.")]
+        public ClampedFloatParameter contactShadowThickness = new ClampedFloatParameter(0.05f, 0.001f, 0.5f);
+
+        [Tooltip("World-space normal offset used to prevent self-intersection.")]
+        public ClampedFloatParameter contactShadowNormalBias = new ClampedFloatParameter(0.02f, 0.0f, 0.2f);
+
+        [Tooltip("Number of depth samples along each contact shadow ray.")]
+        public ClampedIntParameter contactShadowSampleCount = new ClampedIntParameter(16, 4, 32);
+
+        [Tooltip("Strength of the additional contact shadow occlusion.")]
+        public ClampedFloatParameter contactShadowIntensity = new ClampedFloatParameter(1.0f, 0.0f, 1.0f);
+
+        [Tooltip("Randomizes sample positions. Ultra quality filters the changing pattern temporally.")]
+        public ClampedFloatParameter contactShadowJitter = new ClampedFloatParameter(0.75f, 0.0f, 1.0f);
+
+        [Tooltip("Normalized ray position where contact shadow fading begins.")]
+        public ClampedFloatParameter contactShadowRayFadeStart = new ClampedFloatParameter(0.8f, 0.0f, 0.99f);
+
         [Tooltip("Shadow scatter mode.")]
         public ShadowScatterModeParameter shadowScatterMode = new ShadowScatterModeParameter(ShadowScatterMode.SubSurface);
 

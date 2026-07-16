@@ -49,7 +49,7 @@ float PreFilterSearch(float sampleCount, float filterSize, float3 shadowCoord, f
         float radialOffset = filterSize * sampleRadius * texelSizeWS;
         float zoffset = radialOffset / farToNear * blockerInvTangent;
 
-        float depthLS = shadowCoord.z + (Z_OFFSET_DIRECTION) * zoffset;
+        float depthLS = ApplyMainLightReceiverBias(shadowCoord, cascadeIndex).z + (Z_OFFSET_DIRECTION) * zoffset;
 
         float shadowMapDepth = SAMPLE_TEXTURE2D_ARRAY_LOD(_DirectionalLightsShadowmapTexture, sampler_PointClamp, sampleCoord, cascadeIndex, 0).x;
 
@@ -73,8 +73,9 @@ float PreFilterSearch(float sampleCount, float filterSize, float3 shadowCoord, f
 
     // We must cover zero offset.
     float shadowMapDepth = SAMPLE_TEXTURE2D_ARRAY_LOD(_DirectionalLightsShadowmapTexture, sampler_PointClamp, shadowCoord.xy, cascadeIndex, 0).x;
+    float centerDepthLS = ApplyMainLightReceiverBias(shadowCoord, cascadeIndex).z;
     if (!(any(shadowCoord.xy < minCoord) || any(shadowCoord.xy > maxCoord)) && 
-        COMPARE_DEVICE_DEPTH_CLOSER(shadowMapDepth, shadowCoord.z))
+        COMPARE_DEVICE_DEPTH_CLOSER(shadowMapDepth, centerDepthLS))
     {
         numBlockers += 1.0;
     }
@@ -115,7 +116,7 @@ float2 BlockerSearch(float sampleCount, float filterSize, float3 shadowCoord, fl
         float radialOffset = filterSize * sampleDistNorm * texelSizeWS;
         float zoffset = radialOffset / farToNear * blockerInvTangent;
 
-        float depthLS = shadowCoord.z + (Z_OFFSET_DIRECTION) * zoffset;
+        float depthLS = ApplyMainLightReceiverBias(shadowCoord, cascadeIndex).z + (Z_OFFSET_DIRECTION) * zoffset;
 
         float shadowMapDepth = SAMPLE_TEXTURE2D_ARRAY_LOD(_DirectionalLightsShadowmapTexture, sampler_PointClamp, sampleCoord, cascadeIndex, 0).x;
         if (!(any(sampleCoord < minCoord) || any(sampleCoord > maxCoord)) && 
@@ -165,7 +166,7 @@ float PCSSFilter(float sampleCount, float filterSize, float3 shadowCoord, float2
         float radialOffset = filterSize * sampleDistNorm * texelSizeWS;
         float zoffset = radialOffset / farToNear * blockerInvTangent;
 
-        float depthLS = shadowCoord.z + (Z_OFFSET_DIRECTION) * min(zoffset, maxPCSSoffset);
+        float depthLS = ApplyMainLightReceiverBias(shadowCoord, cascadeIndex).z + (Z_OFFSET_DIRECTION) * min(zoffset, maxPCSSoffset);
 
         if (!(any(sampleCoord < minCoord) || any(sampleCoord > maxCoord)))
         {

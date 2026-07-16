@@ -647,7 +647,8 @@ namespace UnityEditor.Rendering.Universal
                     shaderFeatures |= ShaderFeatures.SoftShadowsLow;
                 if (UniversalRenderPipeline.asset?.softShadowQuality == SoftShadowQuality.Medium)
                     shaderFeatures |= ShaderFeatures.SoftShadowsMedium;
-                if (UniversalRenderPipeline.asset?.softShadowQuality == SoftShadowQuality.High)
+                if (UniversalRenderPipeline.asset?.softShadowQuality == SoftShadowQuality.High ||
+                    UniversalRenderPipeline.asset?.softShadowQuality == SoftShadowQuality.Ultra)
                     shaderFeatures |= ShaderFeatures.SoftShadowsHigh;
             }
 

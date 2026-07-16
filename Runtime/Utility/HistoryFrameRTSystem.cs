@@ -59,6 +59,12 @@ namespace UnityEngine.Rendering.Universal
         ScreenSpaceReflectionAccumulation,
         /// <summary>Screen Space Reflection num frames Accumulation.</summary>
         ScreenSpaceReflectionNumFramesAccumulation,
+        /// <summary>屏幕空间方向光阴影历史。</summary>
+        ScreenSpaceDirectionalShadow,
+        /// <summary>屏幕空间方向光阴影矩历史。</summary>
+        ScreenSpaceDirectionalShadowMoments,
+        /// <summary>屏幕空间方向光阴影几何元数据历史。</summary>
+        ScreenSpaceDirectionalShadowMetadata,
         ///// <summary>Path-traced Albedo AOV.</summary>
         //AlbedoAOV,
         ///// <summary>Path-traced Normal AOV.</summary>

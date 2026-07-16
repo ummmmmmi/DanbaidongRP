@@ -19,6 +19,17 @@ namespace UnityEditor.Rendering.Universal
 
         SerializedDataParameter m_PerObjectShadowPenumbra;
 
+        SerializedDataParameter m_ContactShadows;
+        SerializedDataParameter m_ContactShadowLength;
+        SerializedDataParameter m_ContactShadowDistance;
+        SerializedDataParameter m_ContactShadowFadeDistance;
+        SerializedDataParameter m_ContactShadowThickness;
+        SerializedDataParameter m_ContactShadowNormalBias;
+        SerializedDataParameter m_ContactShadowSampleCount;
+        SerializedDataParameter m_ContactShadowIntensity;
+        SerializedDataParameter m_ContactShadowJitter;
+        SerializedDataParameter m_ContactShadowRayFadeStart;
+
         SerializedDataParameter m_ShadowScatterMode;
         SerializedDataParameter m_OcclusionPenumbra;
         SerializedDataParameter m_ShadowRampTex;
@@ -45,6 +56,17 @@ namespace UnityEditor.Rendering.Universal
 
             m_Penumbra = Unpack(o.Find(x => x.penumbra));
             m_PerObjectShadowPenumbra = Unpack(o.Find(x => x.perObjectShadowPenumbra));
+
+            m_ContactShadows = Unpack(o.Find(x => x.contactShadows));
+            m_ContactShadowLength = Unpack(o.Find(x => x.contactShadowLength));
+            m_ContactShadowDistance = Unpack(o.Find(x => x.contactShadowDistance));
+            m_ContactShadowFadeDistance = Unpack(o.Find(x => x.contactShadowFadeDistance));
+            m_ContactShadowThickness = Unpack(o.Find(x => x.contactShadowThickness));
+            m_ContactShadowNormalBias = Unpack(o.Find(x => x.contactShadowNormalBias));
+            m_ContactShadowSampleCount = Unpack(o.Find(x => x.contactShadowSampleCount));
+            m_ContactShadowIntensity = Unpack(o.Find(x => x.contactShadowIntensity));
+            m_ContactShadowJitter = Unpack(o.Find(x => x.contactShadowJitter));
+            m_ContactShadowRayFadeStart = Unpack(o.Find(x => x.contactShadowRayFadeStart));
 
             m_ShadowScatterMode = Unpack(o.Find(x => x.shadowScatterMode));
             m_OcclusionPenumbra = Unpack(o.Find(x => x.occlusionPenumbra));
@@ -114,6 +136,24 @@ namespace UnityEditor.Rendering.Universal
 
             PropertyField(m_Penumbra);
             PropertyField(m_PerObjectShadowPenumbra, s_PerObjectShadowPenumbra);
+
+            EditorGUILayout.Space(10);
+            PropertyField(m_ContactShadows);
+            if (m_ContactShadows.value.boolValue)
+            {
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    PropertyField(m_ContactShadowLength);
+                    PropertyField(m_ContactShadowDistance);
+                    PropertyField(m_ContactShadowFadeDistance);
+                    PropertyField(m_ContactShadowThickness);
+                    PropertyField(m_ContactShadowNormalBias);
+                    PropertyField(m_ContactShadowSampleCount);
+                    PropertyField(m_ContactShadowIntensity);
+                    PropertyField(m_ContactShadowJitter);
+                    PropertyField(m_ContactShadowRayFadeStart);
+                }
+            }
 
             EditorGUILayout.Space(10);
 

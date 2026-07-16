@@ -293,15 +293,23 @@ namespace UnityEngine.Rendering.Universal
         /// <returns>The maximum tile resolution in an Atlas.</returns>
         public static int GetPerObjectTileResolutionInAtlas(int atlasWidth, int atlasHeight, int tileCount)
         {
+            if (atlasWidth <= 0 || atlasHeight <= 0 || tileCount <= 0)
+                return 0;
+
             int resolution = Mathf.Min(atlasWidth, atlasHeight);
-            int currentTileCount = atlasWidth / resolution * atlasHeight / resolution;
-            while (currentTileCount < tileCount)
+            while (resolution > 0)
             {
-                resolution = resolution >> 1;
-                currentTileCount = atlasWidth / resolution * atlasHeight / resolution;
+                long currentTileCount = (long)(atlasWidth / resolution) * (atlasHeight / resolution);
+                if (currentTileCount >= tileCount)
+                    return resolution;
+
+                if (resolution == 1)
+                    break;
+
+                resolution = Mathf.Max(resolution >> 1, 1);
             }
 
-            return resolution;
+            return 0;
         }
 
         public static bool ExtractDirectionalLightMatrix
