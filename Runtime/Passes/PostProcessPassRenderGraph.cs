@@ -8,6 +8,8 @@ namespace UnityEngine.Rendering.Universal
     internal partial class PostProcessPass : ScriptableRenderPass
     {
         static readonly int s_CameraDepthTextureID = Shader.PropertyToID("_CameraDepthTexture");
+        static readonly int s_ColorPickerDebugTextureID = Shader.PropertyToID("_ColorPickerDebugTexture");
+        static readonly int s_ColorPickerDebugFontID = Shader.PropertyToID("_ColorPickerDebugFont");
 
         private class UpdateCameraResolutionPassData
         {
@@ -1683,6 +1685,12 @@ namespace UnityEngine.Rendering.Universal
                 passData.material = m_Materials.finalPass;
                 passData.settings = settings;
 
+                if (GetActiveDebugHandlerForFinalPass(cameraData)?.ColorPickerIsActive(cameraData.isPreviewCamera, cameraData.resolveFinalTarget) == true)
+                {
+                    builder.UseGlobalTexture(s_ColorPickerDebugTextureID);
+                    builder.UseGlobalTexture(s_ColorPickerDebugFontID);
+                }
+
                 if (settings.requireHDROutput && m_EnableColorEncodingIfNeeded)
                     builder.UseTexture(overlayUITexture, AccessFlags.Read);
 
@@ -1821,7 +1829,7 @@ namespace UnityEngine.Rendering.Universal
 
                 SetupHDROutput(cameraData.hdrDisplayInformation, cameraData.hdrDisplayColorGamut, material, settings.hdrOperations, cameraData.rendersOverlayUI);
             }
-            DebugHandler debugHandler = GetActiveDebugHandler(cameraData);
+            DebugHandler debugHandler = GetActiveDebugHandlerForFinalPass(cameraData);
             bool resolveToDebugScreen = debugHandler != null && debugHandler.WriteToDebugScreenTexture(cameraData.resolveFinalTarget);
             debugHandler?.UpdateShaderGlobalPropertiesForFinalValidationPass(renderGraph, cameraData, !m_HasFinalPass && !resolveToDebugScreen);
 
@@ -2059,6 +2067,12 @@ namespace UnityEngine.Rendering.Universal
                 passData.isHdrGrading = hdrGrading;
                 passData.enableAlphaOutput = enableAlphaOutput;
                 passData.hasFinalPass = hasFinalPass;
+
+                if (GetActiveDebugHandlerForFinalPass(cameraData)?.ColorPickerIsActive(cameraData.isPreviewCamera, cameraData.resolveFinalTarget) == true)
+                {
+                    builder.UseGlobalTexture(s_ColorPickerDebugTextureID);
+                    builder.UseGlobalTexture(s_ColorPickerDebugFontID);
+                }
 
                 passData.GTToneMapParams0 = new Vector4(m_Tonemapping.maxBrightness.value, m_Tonemapping.contrast.value, m_Tonemapping.linearSectionStart.value, m_Tonemapping.linearSectionLength.value);
                 passData.GTToneMapParams1 = new Vector4(m_Tonemapping.blackPow.value, m_Tonemapping.blackMin.value, 0.0f, 0.0f);
@@ -2304,7 +2318,7 @@ namespace UnityEngine.Rendering.Universal
 
                 bool enableAlphaOutput = cameraData.isAlphaOutputEnabled;
 
-                DebugHandler debugHandler = GetActiveDebugHandler(cameraData);
+                DebugHandler debugHandler = GetActiveDebugHandlerForFinalPass(cameraData);
                 debugHandler?.UpdateShaderGlobalPropertiesForFinalValidationPass(renderGraph, cameraData, !m_HasFinalPass && !resolveToDebugScreen);
 
                 RenderUberPost(renderGraph, frameData, cameraData, postProcessingData, in currentSource, in postProcessingTarget, in lutTexture, in overlayUITexture, in bloomTexture, requireHDROutput, enableAlphaOutput, resolveToDebugScreen, hasFinalPass);

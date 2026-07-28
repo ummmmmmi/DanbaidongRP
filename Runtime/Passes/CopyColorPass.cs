@@ -192,7 +192,7 @@ namespace UnityEngine.Rendering.Universal.Internal
 
             destination = UniversalRenderer.CreateRenderGraphTexture(renderGraph, descriptor, "_CameraOpaqueTexture", true, filterMode);
             
-            RenderInternal(renderGraph, destination, source, cameraData.xr.enabled);                    
+            RenderInternal(renderGraph, destination, source, cameraData.xr.enabled, Shader.PropertyToID("_CameraOpaqueTexture"));
 
             return destination;
         }
@@ -208,10 +208,21 @@ namespace UnityEngine.Rendering.Universal.Internal
             m_DownsamplingMethod = downsampling;
 
             UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
-            RenderInternal(renderGraph, destination, source, cameraData.xr.enabled);
+            RenderInternal(renderGraph, destination, source, cameraData.xr.enabled, Shader.PropertyToID("_CameraOpaqueTexture"));
         }
 
-        private void RenderInternal(RenderGraph renderGraph, in TextureHandle destination, in TextureHandle source, bool useProceduralBlit)
+        /// <summary>
+        /// 将颜色复制到已有纹理，并把结果设置为指定的全局纹理。
+        /// </summary>
+        internal void RenderToExistingTexture(RenderGraph renderGraph, ContextContainer frameData, in TextureHandle destination, in TextureHandle source, int globalTextureId, Downsampling downsampling = Downsampling.None)
+        {
+            m_DownsamplingMethod = downsampling;
+
+            UniversalCameraData cameraData = frameData.Get<UniversalCameraData>();
+            RenderInternal(renderGraph, destination, source, cameraData.xr.enabled, globalTextureId);
+        }
+
+        private void RenderInternal(RenderGraph renderGraph, in TextureHandle destination, in TextureHandle source, bool useProceduralBlit, int globalTextureId = 0)
         {
             using (var builder = renderGraph.AddRasterRenderPass<PassData>(passName, out var passData, profilingSampler))
             {
@@ -225,8 +236,8 @@ namespace UnityEngine.Rendering.Universal.Internal
                 passData.downsamplingMethod = m_DownsamplingMethod;
                 passData.sampleOffsetShaderHandle = m_SampleOffsetShaderHandle;
 
-                if (destination.IsValid())
-                    builder.SetGlobalTextureAfterPass(destination, Shader.PropertyToID("_CameraOpaqueTexture"));
+                if (destination.IsValid() && globalTextureId != 0)
+                    builder.SetGlobalTextureAfterPass(destination, globalTextureId);
 
                 // TODO RENDERGRAPH: culling? force culling off for testing
                 builder.AllowPassCulling(false);

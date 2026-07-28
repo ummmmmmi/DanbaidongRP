@@ -23,6 +23,7 @@ Shader "Hidden/Universal Render Pipeline/FinalPost"
         #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/Core.hlsl"
         #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/Debug/DebuggingFullscreen.hlsl"
         #include "Packages/com.unity.render-pipelines.danbaidong/Shaders/PostProcessing/Common.hlsl"
+        #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/Debug/DebugColorPicker.hlsl"
 
         TEXTURE2D(_Grain_Texture);
         TEXTURE2D(_BlueNoise_Texture);
@@ -141,14 +142,32 @@ Shader "Hidden/Universal Render Pipeline/FinalPost"
             half4 finalColor = half4(color.rgb, 1.0);
             #endif
 
-            #if defined(DEBUG_DISPLAY)
-            half4 debugColor = 0;
-
-            if(CanDebugOverrideOutputColor(finalColor, uv, debugColor))
+            half4 pickedColor = 0;
+            if (IsColorPickerMouseValid())
             {
-                return debugColor;
+                float2 mouseSourceUv = GetColorPickerSourceUv(_ColorPickerMousePixelCoord.zw);
+                pickedColor = SampleColorPickerColor();
+
+                #if defined(DEBUG_DISPLAY)
+                if (_ColorPickerApplyDebug != 0)
+                {
+                    half4 debugPickedColor = 0;
+                    if (CanDebugOverrideOutputColor(pickedColor, mouseSourceUv, debugPickedColor))
+                        pickedColor = debugPickedColor;
+                }
+                #endif
+            }
+
+            #if defined(DEBUG_DISPLAY)
+            if (_ColorPickerApplyDebug != 0)
+            {
+                half4 debugColor = 0;
+                if (CanDebugOverrideOutputColor(finalColor, uv, debugColor))
+                    finalColor = debugColor;
             }
             #endif
+
+            finalColor = ApplyColorPicker(input, finalColor, pickedColor);
 
             return finalColor;
         }

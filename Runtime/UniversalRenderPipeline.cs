@@ -289,6 +289,7 @@ namespace UnityEngine.Rendering.Universal
 
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
             m_DebugDisplaySettingsUI.RegisterDebug(UniversalRenderPipelineDebugDisplaySettings.Instance);
+            MousePositionDebug.instance.Build();
 #endif
 
             QualitySettings.enableLODCrossFade = asset.enableLODCrossFade;
@@ -324,6 +325,7 @@ namespace UnityEngine.Rendering.Universal
 
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
             m_DebugDisplaySettingsUI.UnregisterDebug();
+            MousePositionDebug.instance.Cleanup();
 #endif
 
             Blitter.Cleanup();

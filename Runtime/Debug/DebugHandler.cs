@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using UnityEditor;
 using UnityEngine.Experimental.Rendering;
@@ -19,6 +20,15 @@ namespace UnityEngine.Rendering.Universal
         static readonly int k_DebugColorPropertyId = Shader.PropertyToID("_DebugColor");
         static readonly int k_DebugTexturePropertyId = Shader.PropertyToID("_DebugTexture");
         static readonly int k_DebugFontId = Shader.PropertyToID("_DebugFont");
+        static readonly int s_ColorPickerModeId = Shader.PropertyToID("_ColorPickerMode");
+        static readonly int s_ColorPickerFontColorId = Shader.PropertyToID("_ColorPickerFontColor");
+        static readonly int s_ColorPickerMousePixelCoordId = Shader.PropertyToID("_ColorPickerMousePixelCoord");
+        static readonly int s_ColorPickerScreenSizeId = Shader.PropertyToID("_ColorPickerScreenSize");
+        static readonly int s_ColorPickerApplyDebugId = Shader.PropertyToID("_ColorPickerApplyDebug");
+        static readonly int s_ColorPickerDebugFontId = Shader.PropertyToID("_ColorPickerDebugFont");
+#if UNITY_EDITOR
+        static readonly MethodInfo s_GetInputMousePositionMethod = typeof(MousePositionDebug).GetMethod("GetInputMousePosition", BindingFlags.Instance | BindingFlags.NonPublic);
+#endif
         static readonly int k_DebugTextureNoStereoPropertyId = Shader.PropertyToID("_DebugTextureNoStereo");
         static readonly int k_DebugTextureDisplayRect = Shader.PropertyToID("_DebugTextureDisplayRect");
         static readonly int k_DebugRenderTargetSupportsStereo = Shader.PropertyToID("_DebugRenderTargetSupportsStereo");
@@ -215,6 +225,14 @@ namespace UnityEngine.Rendering.Universal
             return !isPreviewCamera && AreAnySettingsActive;
         }
 
+        /// <summary>
+        /// 判断 Color Picker 是否需要参与当前相机的最终输出。
+        /// </summary>
+        internal bool ColorPickerIsActive(bool isPreviewCamera, bool resolveFinalTarget)
+        {
+            return !isPreviewCamera && resolveFinalTarget && RenderingSettings.colorPickerMode != ColorPickerDebugMode.None;
+        }
+
         internal bool TryGetFullscreenDebugMode(out DebugFullScreenMode debugFullScreenMode)
         {
             return TryGetFullscreenDebugMode(out debugFullScreenMode, out _);
@@ -354,6 +372,11 @@ namespace UnityEngine.Rendering.Universal
             public int debugRenderTargetSupportsStereo;
             public Vector4 debugRenderTargetRangeRemap;
 
+            public Vector4 colorPickerMousePixelCoord;
+            public Vector4 colorPickerScreenSize;
+            public bool colorPickerIsActive;
+            public int colorPickerApplyDebug;
+
             public TextureHandle debugFontTextureHandle;
 
             // NOTE: The settings are references.
@@ -375,6 +398,12 @@ namespace UnityEngine.Rendering.Universal
             passData.debugRenderTargetPixelRect = m_DebugRenderTargetPixelRect;
             passData.debugRenderTargetSupportsStereo = m_DebugRenderTargetSupportsStereo ? 1 : 0;
             passData.debugRenderTargetRangeRemap = m_DebugRenderTargetRangeRemap;
+
+            passData.colorPickerMousePixelCoord = GetColorPickerMouseCoordinates(cameraData);
+            passData.colorPickerScreenSize = new Vector4(cameraData.pixelRect.width, cameraData.pixelRect.height,
+                cameraData.pixelRect.x, cameraData.pixelRect.y);
+            passData.colorPickerIsActive = ColorPickerIsActive(cameraData.isPreviewCamera, cameraData.resolveFinalTarget);
+            passData.colorPickerApplyDebug = passData.isActiveForCamera ? 1 : 0;
 
             passData.debugFontTextureHandle = TextureHandle.nullHandle;
 
@@ -413,6 +442,11 @@ namespace UnityEngine.Rendering.Universal
             }
 
             var renderingSettings = data.renderingSettings;
+            cmd.SetGlobalInteger(s_ColorPickerModeId, (int)renderingSettings.colorPickerMode);
+            cmd.SetGlobalColor(s_ColorPickerFontColorId, renderingSettings.colorPickerFontColor);
+            cmd.SetGlobalVector(s_ColorPickerMousePixelCoordId, data.colorPickerMousePixelCoord);
+            cmd.SetGlobalVector(s_ColorPickerScreenSizeId, data.colorPickerScreenSize);
+            cmd.SetGlobalInteger(s_ColorPickerApplyDebugId, data.colorPickerApplyDebug);
             if (renderingSettings.validationMode == DebugValidationMode.HighlightOutsideOfRange)
             {
                 cmd.SetGlobalInteger(k_ValidationChannelsId, (int)renderingSettings.validationChannels);
@@ -425,6 +459,9 @@ namespace UnityEngine.Rendering.Universal
                 // some (not all) of these need text rendering
                 cmd.SetGlobalTexture(k_DebugFontId, data.debugFontTextureHandle);
             }
+
+            if (renderingSettings.colorPickerMode != ColorPickerDebugMode.None)
+                cmd.SetGlobalTexture(s_ColorPickerDebugFontId, data.debugFontTextureHandle);
         }
 
         [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
@@ -437,6 +474,44 @@ namespace UnityEngine.Rendering.Universal
                 // some (not all) of these need text rendering
                 cmd.SetGlobalTexture(k_DebugFontId, m_RuntimeTextures.debugFontTexture);
             }
+
+            if (RenderingSettings.colorPickerMode != ColorPickerDebugMode.None)
+                cmd.SetGlobalTexture(s_ColorPickerDebugFontId, m_RuntimeTextures.debugFontTexture);
+        }
+
+        /// <summary>
+        /// 获取鼠标在当前相机视口内的像素坐标和归一化坐标。
+        /// </summary>
+        static Vector4 GetColorPickerMouseCoordinates(UniversalCameraData cameraData)
+        {
+            Rect pixelRect = cameraData.pixelRect;
+            Vector2 mousePosition = MousePositionDebug.instance.GetMousePosition(pixelRect.height, cameraData.isSceneViewCamera);
+
+#if UNITY_EDITOR
+            if (!cameraData.isSceneViewCamera && (mousePosition.x < 0.0f || mousePosition.y < 0.0f))
+                mousePosition = GetGameViewMousePosition();
+#endif
+
+            Vector2 localPosition = mousePosition - pixelRect.position;
+
+            return new Vector4(
+                localPosition.x,
+                localPosition.y,
+                localPosition.x / pixelRect.width,
+                localPosition.y / pixelRect.height);
+        }
+
+        /// <summary>
+        /// 获取编辑器 GameView 中的鼠标位置。
+        /// </summary>
+        static Vector2 GetGameViewMousePosition()
+        {
+#if UNITY_EDITOR
+            object result = s_GetInputMousePositionMethod?.Invoke(MousePositionDebug.instance, null);
+            return result is Vector2 mousePosition ? mousePosition : new Vector2(-1.0f, -1.0f);
+#else
+            return new Vector2(-1.0f, -1.0f);
+#endif
         }
 
         [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
@@ -464,7 +539,10 @@ namespace UnityEngine.Rendering.Universal
                 if (passData.debugFontTextureHandle.IsValid())
                 {
                     builder.UseTexture(passData.debugFontTextureHandle);
-                    builder.SetGlobalTextureAfterPass(passData.debugFontTextureHandle, k_DebugFontId);
+                    if (passData.renderingSettings.mipInfoMode != DebugMipInfoMode.None)
+                        builder.SetGlobalTextureAfterPass(passData.debugFontTextureHandle, k_DebugFontId);
+                    if (passData.renderingSettings.colorPickerMode != ColorPickerDebugMode.None)
+                        builder.SetGlobalTextureAfterPass(passData.debugFontTextureHandle, s_ColorPickerDebugFontId);
                 }
 
                 builder.SetRenderFunc(static (DebugFinalValidationPassData data, RasterGraphContext context) =>
@@ -498,6 +576,9 @@ namespace UnityEngine.Rendering.Universal
         [Conditional("DEVELOPMENT_BUILD"), Conditional("UNITY_EDITOR")]
         static void Setup(RasterCommandBuffer cmd, DebugSetupPassData passData)
         {
+            cmd.SetGlobalInteger(s_ColorPickerModeId, (int)ColorPickerDebugMode.None);
+            cmd.SetGlobalInteger(s_ColorPickerApplyDebugId, 0);
+
             if (passData.isActiveForCamera)
             {
                 cmd.SetKeyword(ShaderGlobalKeywords.DEBUG_DISPLAY, true);

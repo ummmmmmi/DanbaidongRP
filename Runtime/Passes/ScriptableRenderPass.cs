@@ -346,6 +346,22 @@ namespace UnityEngine.Rendering.Universal
         }
 
         /// <summary>
+        /// 获取需要处理最终输出的调试器，包括仅启用 Color Picker 的情况。
+        /// </summary>
+        static internal DebugHandler GetActiveDebugHandlerForFinalPass(UniversalCameraData cameraData)
+        {
+            var debugHandler = cameraData.renderer.DebugHandler;
+            if (debugHandler == null)
+                return null;
+
+            if (debugHandler.IsActiveForCamera(cameraData.isPreviewCamera) ||
+                debugHandler.ColorPickerIsActive(cameraData.isPreviewCamera, cameraData.resolveFinalTarget))
+                return debugHandler;
+
+            return null;
+        }
+
+        /// <summary>
         /// Creates a new <c>ScriptableRenderPass"</c> instance.
         /// </summary>
         public ScriptableRenderPass()            

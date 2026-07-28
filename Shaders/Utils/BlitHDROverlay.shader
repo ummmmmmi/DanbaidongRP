@@ -15,6 +15,7 @@ Shader "Hidden/Universal/BlitHDROverlay"
         #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/HDROutput.hlsl"
         // DebuggingFullscreen.hlsl for URP debug draw
         #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/Debug/DebuggingFullscreen.hlsl"
+        #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/Debug/DebugColorPicker.hlsl"
 
         TEXTURE2D_X(_OverlayUITexture);
 
@@ -55,14 +56,33 @@ Shader "Hidden/Universal/BlitHDROverlay"
         {
             half4 color = FragBlitHDR(input, blitsampler);
             
-            #if defined(DEBUG_DISPLAY)
-            half4 debugColor = 0;
-            float2 uv = input.texcoord;
-            if (CanDebugOverrideOutputColor(color, uv, debugColor))
+            half4 pickedColor = 0;
+            if (IsColorPickerMouseValid())
             {
-                return debugColor;
+                float2 mouseSourceUv = GetColorPickerSourceUv(_ColorPickerMousePixelCoord.zw);
+                pickedColor = SampleColorPickerColor();
+
+                #if defined(DEBUG_DISPLAY)
+                if (_ColorPickerApplyDebug != 0)
+                {
+                    half4 debugPickedColor = 0;
+                    if (CanDebugOverrideOutputColor(pickedColor, mouseSourceUv, debugPickedColor))
+                        pickedColor = debugPickedColor;
+                }
+                #endif
+            }
+
+            #if defined(DEBUG_DISPLAY)
+            if (_ColorPickerApplyDebug != 0)
+            {
+                half4 debugColor = 0;
+                float2 uv = input.texcoord;
+                if (CanDebugOverrideOutputColor(color, uv, debugColor))
+                    color = debugColor;
             }
             #endif
+
+            color = ApplyColorPicker(input, color, pickedColor);
 
             return color;
         }

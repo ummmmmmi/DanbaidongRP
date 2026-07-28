@@ -694,7 +694,7 @@ namespace UnityEngine.Rendering.Universal
 
                 CoreUtils.SetKeyword(m_Materials.uber, ShaderKeywordStrings._ENABLE_ALPHA_OUTPUT, cameraData.isAlphaOutputEnabled);
 
-                DebugHandler debugHandler = GetActiveDebugHandler(cameraData);
+                DebugHandler debugHandler = GetActiveDebugHandlerForFinalPass(cameraData);
                 bool resolveToDebugScreen = debugHandler != null && debugHandler.WriteToDebugScreenTexture(cameraData.resolveFinalTarget);
                 debugHandler?.UpdateShaderGlobalPropertiesForFinalValidationPass(cmd, cameraData, !m_HasFinalPass && !resolveToDebugScreen);
 
@@ -1758,7 +1758,7 @@ namespace UnityEngine.Rendering.Universal
 
             CoreUtils.SetKeyword(material, ShaderKeywordStrings._ENABLE_ALPHA_OUTPUT, cameraData.isAlphaOutputEnabled);
 
-            DebugHandler debugHandler = GetActiveDebugHandler(cameraData);
+            DebugHandler debugHandler = GetActiveDebugHandlerForFinalPass(cameraData);
             bool resolveToDebugScreen = debugHandler != null && debugHandler.WriteToDebugScreenTexture(cameraData.resolveFinalTarget);
             debugHandler?.UpdateShaderGlobalPropertiesForFinalValidationPass(cmd, cameraData, m_IsFinalPass && !resolveToDebugScreen);
 

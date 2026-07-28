@@ -292,6 +292,8 @@ namespace UnityEngine.Rendering.Universal
             requireColorTexture |= HasPassesRequiringIntermediateTexture();
             requireColorTexture |= Application.isEditor && m_Clustering;
             requireColorTexture |= RequiresIntermediateColorTexture(cameraData, ref renderPassInputs);
+            requireColorTexture |= DebugHandler != null &&
+                DebugHandler.DebugDisplaySettings.renderingSettings.colorPickerMode != ColorPickerDebugMode.None;
             requireColorTexture &= !isPreviewCamera;
 
             var requireDepthTexture = RequireDepthTexture(cameraData, requiresDepthPrepass, ref renderPassInputs);
@@ -302,6 +304,22 @@ namespace UnityEngine.Rendering.Universal
             bool intermediateRenderTexture = (requireColorTexture || requireDepthTexture);
             createDepthTexture = intermediateRenderTexture;
             createColorTexture = intermediateRenderTexture;
+        }
+
+        /// <summary>
+        /// 在后处理前捕获 RenderGraph 路径的 Color Picker HDR 颜色源。
+        /// </summary>
+        void CaptureColorPickerTexture(RenderGraph renderGraph, UniversalCameraData cameraData, in TextureHandle source)
+        {
+            if (DebugHandler == null || !DebugHandler.ColorPickerIsActive(cameraData.isPreviewCamera, cameraData.resolveFinalTarget))
+                return;
+
+            RenderTextureDescriptor descriptor = cameraData.cameraTargetDescriptor;
+            CopyColorPass.ConfigureDescriptor(Downsampling.None, ref descriptor, out FilterMode filterMode);
+            descriptor.graphicsFormat = GraphicsFormat.R16G16B16A16_SFloat;
+
+            TextureHandle colorPickerTexture = CreateRenderGraphTexture(renderGraph, descriptor, "_ColorPickerDebugTexture", false, filterMode);
+            m_ColorPickerCapturePass.RenderToExistingTexture(renderGraph, frameData, colorPickerTexture, source, s_ColorPickerDebugTextureId);
         }
 
         // Gather history render requests and manage camera history texture life-time.
@@ -1825,6 +1843,8 @@ namespace UnityEngine.Rendering.Universal
 
             RecordCustomRenderGraphPasses(renderGraph, RenderPassEvent.BeforeRenderingPostProcessing);
 
+            CaptureColorPickerTexture(renderGraph, cameraData, resourceData.activeColorTexture);
+
             bool cameraTargetResolved = false;
             bool applyPostProcessing = ShouldApplyPostProcessing(cameraData.postProcessEnabled);
             // There's at least a camera in the camera stack that applies post-processing
@@ -1848,7 +1868,7 @@ namespace UnityEngine.Rendering.Universal
             bool needsColorEncoding = DebugHandler == null || !DebugHandler.HDRDebugViewIsActive(cameraData.resolveFinalTarget);
             bool xrDepthTargetResolved = resourceData.activeDepthID == UniversalResourceData.ActiveID.BackBuffer;
 
-            DebugHandler debugHandler = ScriptableRenderPass.GetActiveDebugHandler(cameraData);
+            DebugHandler debugHandler = ScriptableRenderPass.GetActiveDebugHandlerForFinalPass(cameraData);
             bool resolveToDebugScreen = debugHandler != null && debugHandler.WriteToDebugScreenTexture(cameraData.resolveFinalTarget);
             // Allocate debug screen texture if the debug mode needs it.
             if (resolveToDebugScreen)
@@ -2055,6 +2075,8 @@ namespace UnityEngine.Rendering.Universal
 
             RecordCustomRenderGraphPasses(renderGraph, RenderPassEvent.BeforeRenderingPostProcessing);
 
+            CaptureColorPickerTexture(renderGraph, cameraData, resourceData.activeColorTexture);
+
             bool cameraTargetResolved = false;
             bool applyPostProcessing = ShouldApplyPostProcessing(cameraData.postProcessEnabled);
             // There's at least a camera in the camera stack that applies post-processing
@@ -2078,7 +2100,7 @@ namespace UnityEngine.Rendering.Universal
             bool needsColorEncoding = DebugHandler == null || !DebugHandler.HDRDebugViewIsActive(cameraData.resolveFinalTarget);
             bool xrDepthTargetResolved = resourceData.activeDepthID == UniversalResourceData.ActiveID.BackBuffer;
 
-            DebugHandler debugHandler = ScriptableRenderPass.GetActiveDebugHandler(cameraData);
+            DebugHandler debugHandler = ScriptableRenderPass.GetActiveDebugHandlerForFinalPass(cameraData);
             bool resolveToDebugScreen = debugHandler != null && debugHandler.WriteToDebugScreenTexture(cameraData.resolveFinalTarget);
             // Allocate debug screen texture if the debug mode needs it.
             if (resolveToDebugScreen)

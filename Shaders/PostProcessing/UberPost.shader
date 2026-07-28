@@ -32,6 +32,7 @@ Shader "Hidden/Universal Render Pipeline/UberPost"
         #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/Core.hlsl"
         #include "Packages/com.unity.render-pipelines.danbaidong/Shaders/PostProcessing/Common.hlsl"
         #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/Debug/DebuggingFullscreen.hlsl"
+        #include "Packages/com.unity.render-pipelines.danbaidong/ShaderLibrary/Debug/DebugColorPicker.hlsl"
         #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/DynamicScalingClamping.hlsl"
         #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/FoveatedRendering.hlsl"
 
@@ -332,21 +333,40 @@ Shader "Hidden/Universal Render Pipeline/UberPost"
             }
             #endif
 
-            #if defined(DEBUG_DISPLAY)
-            half4 debugColor = 0;
+            #if _ENABLE_ALPHA_OUTPUT
+            half4 finalColor = half4(color, saturate(inputColor.a));
+            #else
+            half4 finalColor = half4(color, 1);
+            #endif
 
-            if(CanDebugOverrideOutputColor(half4(color, 1), uv, debugColor))
+            half4 pickedColor = 0;
+            if (IsColorPickerMouseValid())
             {
-                return debugColor;
+                float2 mouseSourceUv = GetColorPickerSourceUv(_ColorPickerMousePixelCoord.zw);
+                pickedColor = SampleColorPickerColor();
+
+                #if defined(DEBUG_DISPLAY)
+                if (_ColorPickerApplyDebug != 0)
+                {
+                    half4 debugPickedColor = 0;
+                    if (CanDebugOverrideOutputColor(pickedColor, mouseSourceUv, debugPickedColor))
+                        pickedColor = debugPickedColor;
+                }
+                #endif
+            }
+
+            #if defined(DEBUG_DISPLAY)
+            if (_ColorPickerApplyDebug != 0)
+            {
+                half4 debugColor = 0;
+                if (CanDebugOverrideOutputColor(finalColor, uv, debugColor))
+                    finalColor = debugColor;
             }
             #endif
 
-            #if _ENABLE_ALPHA_OUTPUT
-            // Saturate is necessary to avoid issues when additive blending pushes the alpha over 1.
-            return half4(color, saturate(inputColor.a));
-            #else
-            return half4(color, 1);
-            #endif
+            finalColor = ApplyColorPicker(input, finalColor, pickedColor);
+
+            return finalColor;
         }
 
     ENDHLSL

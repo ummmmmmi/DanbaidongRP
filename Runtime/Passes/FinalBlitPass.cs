@@ -17,6 +17,8 @@ namespace UnityEngine.Rendering.Universal.Internal
         private PassData m_PassData;
 
         static readonly int s_CameraDepthTextureID = Shader.PropertyToID("_CameraDepthTexture");
+        static readonly int s_ColorPickerDebugTextureID = Shader.PropertyToID("_ColorPickerDebugTexture");
+        static readonly int s_ColorPickerDebugFontID = Shader.PropertyToID("_ColorPickerDebugFont");
 
         // Use specialed URP fragment shader pass for debug draw support and color space conversion/encoding support.
         // See CoreBlit.shader and BlitHDROverlay.shader
@@ -108,7 +110,7 @@ namespace UnityEngine.Rendering.Universal.Internal
         public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData)
         {
             UniversalCameraData cameraData = renderingData.frameData.Get<UniversalCameraData>();
-            DebugHandler debugHandler = GetActiveDebugHandler(cameraData);
+            DebugHandler debugHandler = GetActiveDebugHandlerForFinalPass(cameraData);
             bool resolveToDebugScreen = debugHandler != null && debugHandler.WriteToDebugScreenTexture(cameraData.resolveFinalTarget);
 
             if (resolveToDebugScreen)
@@ -138,7 +140,7 @@ namespace UnityEngine.Rendering.Universal.Internal
             }
 
             var cameraTarget = RenderingUtils.GetCameraTargetIdentifier(ref renderingData);
-            DebugHandler debugHandler = GetActiveDebugHandler(cameraData);
+            DebugHandler debugHandler = GetActiveDebugHandlerForFinalPass(cameraData);
             bool resolveToDebugScreen = debugHandler != null && debugHandler.WriteToDebugScreenTexture(cameraData.resolveFinalTarget);
 
             // Get RTHandle alias to use RTHandle apis
@@ -277,6 +279,12 @@ namespace UnityEngine.Rendering.Universal.Internal
                 if (cameraData.requiresDepthTexture && isUniversalRenderer)
                     builder.UseGlobalTexture(s_CameraDepthTextureID);
 
+                if (GetActiveDebugHandlerForFinalPass(cameraData)?.ColorPickerIsActive(cameraData.isPreviewCamera, cameraData.resolveFinalTarget) == true)
+                {
+                    builder.UseGlobalTexture(s_ColorPickerDebugTextureID);
+                    builder.UseGlobalTexture(s_ColorPickerDebugFontID);
+                }
+
                 bool outputsToHDR = cameraData.isHDROutputActive;
                 bool outputsAlpha = cameraData.isAlphaOutputEnabled;
                 InitPassData(cameraData, ref passData, outputsToHDR ? BlitType.HDR : BlitType.Core, outputsAlpha);
@@ -315,7 +323,7 @@ namespace UnityEngine.Rendering.Universal.Internal
                     context.cmd.SetKeyword(ShaderGlobalKeywords.LinearToSRGBConversion, data.requireSrgbConversion);
                     data.blitMaterialData.material.SetTexture(data.sourceID, data.source);
 
-                    DebugHandler debugHandler = GetActiveDebugHandler(data.cameraData);
+                    DebugHandler debugHandler = GetActiveDebugHandlerForFinalPass(data.cameraData);
                     bool resolveToDebugScreen = debugHandler != null && debugHandler.WriteToDebugScreenTexture(data.cameraData.resolveFinalTarget);
 
                     // TODO RENDERGRAPH: this should ideally be shared in ExecutePass to avoid code duplication

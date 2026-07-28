@@ -176,6 +176,16 @@ namespace UnityEngine.Rendering.Universal
         public bool enableHDR { get; set; } = true;
 
         /// <summary>
+        /// Current Color Picker display mode.
+        /// </summary>
+        public ColorPickerDebugMode colorPickerMode { get; set; } = ColorPickerDebugMode.None;
+
+        /// <summary>
+        /// Color used to draw Color Picker values.
+        /// </summary>
+        public Color colorPickerFontColor { get; set; } = Color.red;
+
+        /// <summary>
         /// Current Temporal Anti-aliasing debug mode.
         /// </summary>
         public enum TaaDebugMode
@@ -241,6 +251,8 @@ namespace UnityEngine.Rendering.Universal
             public static readonly NameAndTooltip MSAA = new() { name = "MSAA", tooltip = "Use the checkbox to disable MSAA in the scene." };
             public static readonly NameAndTooltip HDR = new() { name = "HDR", tooltip = "Use the checkbox to disable High Dynamic Range in the scene." };
             public static readonly NameAndTooltip TaaDebugMode = new() { name = "TAA Debug Mode", tooltip = "Choose whether to force TAA to output the raw jittered frame or clamped reprojected history." };
+            public static readonly NameAndTooltip colorPickerMode = new() { name = "Debug Mode", tooltip = "Choose how the pixel under the pointer is displayed." };
+            public static readonly NameAndTooltip colorPickerFontColor = new() { name = "Font Color", tooltip = "Set the color of the displayed pixel values." };
             public static readonly NameAndTooltip PixelValidationMode = new() { name = "Pixel Validation Mode", tooltip = "Choose between modes that validate pixel on screen." };
             public static readonly NameAndTooltip Channels = new() { name = "Channels", tooltip = "Choose the texture channel used to validate the scene." };
             public static readonly NameAndTooltip ValueRangeMin = new() { name = "Value Range Min", tooltip = "Any values set below this field will be considered invalid and will appear red on screen." };
@@ -502,6 +514,35 @@ namespace UnityEngine.Rendering.Universal
                 onValueChanged = (_, _) => DebugManager.instance.ReDrawOnScreenDebug()
             };
 
+            /// <summary>
+            /// 创建 Color Picker 的调试控件。
+            /// </summary>
+            internal static DebugUI.Widget CreateColorPicker(SettingsPanel panel) => new DebugUI.Container
+            {
+                displayName = "Color Picker",
+                flags = DebugUI.Flags.EditorOnly,
+                children =
+                {
+                    new DebugUI.EnumField
+                    {
+                        nameAndTooltip = Strings.colorPickerMode,
+                        autoEnum = typeof(ColorPickerDebugMode),
+                        getter = () => (int)panel.data.colorPickerMode,
+                        setter = value => panel.data.colorPickerMode = (ColorPickerDebugMode)value,
+                        getIndex = () => (int)panel.data.colorPickerMode,
+                        setIndex = value => panel.data.colorPickerMode = (ColorPickerDebugMode)value
+                    },
+                    new DebugUI.ColorField
+                    {
+                        nameAndTooltip = Strings.colorPickerFontColor,
+                        getter = () => panel.data.colorPickerFontColor,
+                        setter = value => panel.data.colorPickerFontColor = value,
+                        showAlpha = false,
+                        hdr = false
+                    }
+                }
+            };
+
             internal static DebugUI.Widget CreatePixelValidationMode(SettingsPanel panel) => new DebugUI.EnumField
             {
                 nameAndTooltip = Strings.PixelValidationMode,
@@ -562,6 +603,7 @@ namespace UnityEngine.Rendering.Universal
                         WidgetFactory.CreateHDR(this),
                         WidgetFactory.CreateMSAA(this),
                         WidgetFactory.CreateTaaDebugMode(this),
+                        WidgetFactory.CreateColorPicker(this),
                         WidgetFactory.CreatePostProcessing(this),
                         WidgetFactory.CreateAdditionalWireframeShaderViews(this),
                         WidgetFactory.CreateWireframeNotSupportedWarning(this),

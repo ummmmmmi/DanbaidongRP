@@ -39,6 +39,8 @@ namespace UnityEngine.Rendering.Universal
     /// </summary>
     public sealed partial class UniversalRenderer : ScriptableRenderer
     {
+        static readonly int s_ColorPickerDebugTextureId = Shader.PropertyToID("_ColorPickerDebugTexture");
+
 #if UNITY_SWITCH || UNITY_ANDROID || UNITY_EMBEDDED_LINUX || UNITY_QNX
         const GraphicsFormat k_DepthStencilFormatDefault = GraphicsFormat.D24_UNorm_S8_UInt;
 #else
@@ -129,6 +131,7 @@ namespace UnityEngine.Rendering.Universal
         DrawSkyboxPass m_DrawSkyboxPass;
         CopyDepthPass m_CopyDepthPass;
         CopyColorPass m_CopyColorPass;
+        CopyColorPass m_ColorPickerCapturePass;
         TransparentSettingsPass m_TransparentSettingsPass;
         DrawObjectsPass m_RenderTransparentForwardPass;
         InvokeOnRenderObjectCallbackPass m_OnRenderObjectCallbackPass;
@@ -162,6 +165,7 @@ namespace UnityEngine.Rendering.Universal
         RTHandle m_NormalsTexture;
         RTHandle m_DecalLayersTexture;
         RTHandle m_OpaqueColor;
+        RTHandle m_ColorPickerDebugTexture;
         RTHandle m_MotionVectorColor;
         RTHandle m_MotionVectorDepth;
 
@@ -372,6 +376,7 @@ namespace UnityEngine.Rendering.Universal
 
             m_DrawSkyboxPass = new DrawSkyboxPass(RenderPassEvent.BeforeRenderingSkybox);
             m_CopyColorPass = new CopyColorPass(RenderPassEvent.AfterRenderingSkybox, m_SamplingMaterial, m_BlitMaterial);
+            m_ColorPickerCapturePass = new CopyColorPass(RenderPassEvent.BeforeRenderingPostProcessing, m_SamplingMaterial, m_BlitMaterial, customPassName: "Capture Color Picker Source");
             m_ColorPyramidPass = new ColorPyramidPass(RenderPassEvent.AfterRenderingSkybox, runtimeShaders.colorPyramidCS);
 #if ADAPTIVE_PERFORMANCE_2_1_0_OR_NEWER
             if (needTransparencyPass)
@@ -502,6 +507,7 @@ namespace UnityEngine.Rendering.Universal
             m_NormalsTexture?.Release();
             m_DecalLayersTexture?.Release();
             m_OpaqueColor?.Release();
+            m_ColorPickerDebugTexture?.Release();
             m_MotionVectorColor?.Release();
             m_MotionVectorDepth?.Release();
             hasReleasedRTs = true;
@@ -928,6 +934,8 @@ namespace UnityEngine.Rendering.Universal
 
 
             createColorTexture |= RequiresIntermediateColorTexture(cameraData, ref renderPassInputs);
+            createColorTexture |= DebugHandler != null &&
+                DebugHandler.DebugDisplaySettings.renderingSettings.colorPickerMode != ColorPickerDebugMode.None;
             createColorTexture &= !isPreviewCamera;
 
             // If camera requires depth and there's no depth pre-pass we create a depth texture that can be read later by effect requiring it.
@@ -1450,6 +1458,7 @@ namespace UnityEngine.Rendering.Universal
 
             // "Raw render" color/depth history.
             // Should include opaque and transparent geometry before TAA or any post-processing effects. No UI overlays etc.
+            SetupColorPickerCapture(cameraData, ref cameraTargetDescriptor);
             SetupRawColorDepthHistory(cameraData, ref cameraTargetDescriptor);
 
             bool shouldRenderUI = cameraData.rendersOverlayUI;
@@ -1597,6 +1606,23 @@ namespace UnityEngine.Rendering.Universal
                         (int)(cameraData.pixelWidth * cameraData.renderScale), (int)(cameraData.pixelHeight * cameraData.renderScale));
                 }
             }
+        }
+
+        /// <summary>
+        /// 在后处理前捕获 Color Picker 使用的独立 HDR 颜色源。
+        /// </summary>
+        void SetupColorPickerCapture(UniversalCameraData cameraData, ref RenderTextureDescriptor cameraTargetDescriptor)
+        {
+            if (DebugHandler == null || !DebugHandler.ColorPickerIsActive(cameraData.isPreviewCamera, cameraData.resolveFinalTarget))
+                return;
+
+            RenderTextureDescriptor descriptor = cameraTargetDescriptor;
+            CopyColorPass.ConfigureDescriptor(Downsampling.None, ref descriptor, out FilterMode filterMode);
+            descriptor.graphicsFormat = GraphicsFormat.R16G16B16A16_SFloat;
+            RenderingUtils.ReAllocateHandleIfNeeded(ref m_ColorPickerDebugTexture, descriptor, filterMode, TextureWrapMode.Clamp, name: "_ColorPickerDebugTexture");
+
+            m_ColorPickerCapturePass.Setup(m_ActiveCameraColorAttachment, m_ColorPickerDebugTexture, Downsampling.None);
+            EnqueuePass(m_ColorPickerCapturePass);
         }
 
         // "Raw render" color/depth history.
