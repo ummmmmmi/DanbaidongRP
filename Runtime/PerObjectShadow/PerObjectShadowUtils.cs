@@ -390,6 +390,9 @@ namespace UnityEngine.Rendering.Universal
             ref PerObjectShadowSliceData shadowSliceData, 
             Material material, int passIndex)
         {
+            if (renderers == null)
+                return;
+
             Matrix4x4 view = shadowSliceData.viewMatrix;
             Matrix4x4 proj = shadowSliceData.projectionMatrix;
 
@@ -400,15 +403,25 @@ namespace UnityEngine.Rendering.Universal
 
             foreach (Renderer r in renderers)
             {
+                if (r == null)
+                    continue;
+
                 int submeshCount = 0;
                 switch (r)
                 {
                     case MeshRenderer meshRenderer:
-                        submeshCount = meshRenderer == null ? 0 : meshRenderer.GetComponent<MeshFilter>().sharedMesh.subMeshCount;
+                    {
+                        MeshFilter meshFilter = meshRenderer.GetComponent<MeshFilter>();
+                        Mesh mesh = meshFilter != null ? meshFilter.sharedMesh : null;
+                        submeshCount = mesh != null ? mesh.subMeshCount : 0;
                         break;
+                    }
                     case SkinnedMeshRenderer skinnedMeshRenderer:
-                        submeshCount = skinnedMeshRenderer == null? 0 : skinnedMeshRenderer.sharedMesh.subMeshCount;
+                    {
+                        Mesh mesh = skinnedMeshRenderer.sharedMesh;
+                        submeshCount = mesh != null ? mesh.subMeshCount : 0;
                         break;
+                    }
                     default:
                         break;
                 }
